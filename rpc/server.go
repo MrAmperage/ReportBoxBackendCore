@@ -33,6 +33,7 @@ type Server struct {
 	cfg       ServerConfig
 	logger    *slog.Logger
 	report    lifecycle.ReportFailure
+	registry  *health.Registry
 	handlers  map[string]http.Handler
 	server    *http.Server
 	listener  net.Listener
@@ -57,7 +58,7 @@ func newServer(cfg ServerConfig, production bool, logger *slog.Logger, registry 
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{cfg: cfg, logger: logger, report: report, handlers: routes, signal: signal, drained: make(chan struct{}), done: make(chan struct{})}
+	s := &Server{cfg: cfg, logger: logger, report: report, registry: registry, handlers: routes, signal: signal, drained: make(chan struct{}), done: make(chan struct{})}
 	if err := registry.Register(health.Check{Name: "rpc.server", Required: true, Run: func(context.Context) error {
 		if !s.alive.Load() {
 			return errors.New("RPC listener is not running")
@@ -210,7 +211,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	if !s.accepting || s.active >= s.cfg.MaxConcurrent {
+	if !s.accepting || !s.registry.Running() || s.active >= s.cfg.MaxConcurrent {
 		s.mu.Unlock()
 		http.Error(w, "RPC unavailable", http.StatusServiceUnavailable)
 		return

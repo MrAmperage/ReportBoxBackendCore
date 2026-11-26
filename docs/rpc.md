@@ -2,7 +2,7 @@
 
 [Архитектура](architecture.md) · [Контракты и сообщения](messaging.md) · [ADR RPC](adr/rpc.md)
 
-Статус: кандидат этапа 2 в ветке `RPC`. Реализованы модули и тесты; полный прогон на Go 1.27 ещё не подтверждён. Caddy и production deployment не изменялись.
+Статус: кандидат этапа 2, ревизия исходников ветки `RPC` на базе `86d645b`. Подготовлены исправления допуска запросов и lifetime клиента; полный прогон на Go 1.27 ещё не подтверждён. Caddy и production deployment не изменялись.
 
 ## 1. Подключение
 
@@ -50,7 +50,7 @@ auth := authv1connect.NewAuthServiceClient(
 )
 ```
 
-Протокол выбирается явно: `rpc.GRPC` (рекомендуется Go-to-Go), `rpc.Connect`, `rpc.GRPCWeb`. `Target` принимает только HTTP(S) origin без credentials, path, query и fragment. Клиент привязан к origin, redirects отключены, HTTP proxy из ENV не применяется. Для TLS включены HTTP/1.1 и HTTP/2; plaintext gRPC использует h2c prior knowledge, остальные plaintext режимы — HTTP/1.1. Для HTTP plaintext outside loopback требуется явное разрешение; TLS/mTLS предпочтительны между хостами. Client TLS keypair несовместим с plaintext target. Дополнительные `connect.ClientOption` можно передать в `Target`, например interceptors; не задавать ими конфликтующий wire protocol и не обходить лимиты. Target не является проверкой здоровья remote. Создавать generated client один раз для endpoint, не создавать transport на запрос. Передавать контекст с deadline в каждый вызов; общий `http.Client.Timeout` ограничивает также streaming body. При закрытии не принимаются новые вызовы, закрываются idle connections; активные вызовы должны быть завершены владельцем до Close или отменены своими контекстами.
+Протокол выбирается явно: `rpc.GRPC` (рекомендуется Go-to-Go), `rpc.Connect`, `rpc.GRPCWeb`. `Target` принимает только HTTP(S) origin без credentials, path, query и fragment. Клиент привязан к origin: проверяются URL scheme/host, HTTP Host (authority), отсутствие credentials и opaque URL. Redirects отключены, HTTP proxy из ENV не применяется. Для TLS включены HTTP/1.1 и HTTP/2; plaintext gRPC использует h2c prior knowledge, остальные plaintext режимы — HTTP/1.1. Для HTTP plaintext outside loopback требуется явное разрешение; TLS/mTLS предпочтительны между хостами. Client TLS keypair несовместим с plaintext target. Дополнительные `connect.ClientOption` можно передать в `Target`, например interceptors; не задавать ими конфликтующий wire protocol и не обходить лимиты. Target не является проверкой здоровья remote. Создавать generated client один раз для endpoint, не создавать transport на запрос. Передавать контекст с deadline в каждый вызов; общий `http.Client.Timeout` ограничивает также streaming body. При Close не принимаются новые вызовы, отменяется общий lifetime всех исходящих запросов, включая чтение открытых streams, и закрываются idle connections. Контекст вызова сохраняется; отмена lifetime связана с ним до EOF/Close body. При штатном shutdown владельцы должны завершить обработчики до Close клиента.
 
 ## 4. Конфигурация
 
@@ -85,7 +85,7 @@ Limits положительные; лимит сообщений действу�
 
 ## 5. Lifecycle
 
-Оба модуля реализуют `lifecycle.Participant` (`rpc.server`, `rpc.client`). Сервер: Open проверяет сертификаты и синхронно bind; Activate запускает Serve; health check `rpc.server` required; ошибка listener → `lifecycle.ReportFailure`. Quiesce закрывает admission и `ShutdownSignal.Done()`, Drain завершает HTTP requests/streams; 20% оставшегося deadline, максимум 1s, резервируется для forced close и cancellation. Close закрывает listener, отменяет lifetime context. Активные обработчики отслеживаются; произвольный некооперативный Go-код принудительно остановить невозможно. Клиентские transports готовятся в Open и закрываются после Drain всех участников. `rpc.ShutdownSignal` можно внедрить непосредственно в handler для graceful завершения долгого stream без циклической зависимости от `rpc.Server`.
+Оба модуля реализуют `lifecycle.Participant` (`rpc.server`, `rpc.client`). Сервер: Open проверяет сертификаты и синхронно bind; Activate запускает Serve; health check `rpc.server` required; ошибка listener → `lifecycle.ReportFailure`. Допуск business RPC возможен только при фазе Core Running (`health.Registry.Running()`, без выполнения dependency probes), открытом admission и свободном concurrency slot. Во время startup/stop возвращается HTTP 503. Это не замена readiness checks. Quiesce закрывает admission и `ShutdownSignal.Done()`, Drain завершает HTTP requests/streams; 20% оставшегося deadline, максимум 1s, резервируется для forced close и cancellation. Close закрывает listener, отменяет lifetime context. Активные обработчики отслеживаются; произвольный некооперативный Go-код принудительно остановить невозможно. Клиентские transports готовятся в Open и закрываются после Drain всех участников. `rpc.ShutdownSignal` можно внедрить непосредственно в handler для graceful завершения долгого stream без циклической зависимости от `rpc.Server`.
 
 ```go
 func stream(ctx context.Context, signal *rpc.ShutdownSignal) error {
@@ -102,7 +102,7 @@ Readiness и lifecycle coordinator остаются в Core. RPC не откры
 
 [Два процесса](../examples/rpc-demo/README.md) используют один Protobuf contract и типизированные нативные Go handlers/clients на готовом well-known type. Service stubs и TypeScript генерация не включены: это отдельная задача прикладных сервисов. Buf/protoc и registry контрактов остаются открытым выбором. ConnectRPC Go reference: https://connectrpc.com/docs/go/getting-started/ ; Go HTTP protocols: https://pkg.go.dev/net/http#Protocols .
 
-Тесты: config/validation, отсутствующие TLS-файлы; реальный HTTP/1.1/HTTP/2 loopback, Connect/gRPC/gRPC-Web, errors/recovery, auth, message limits, stream drain, duplicate route, bind failure, client-only и origin validation. Локально Go 1.23.2 позволяет проверить только стандартно-библиотечные config/security tests; Go 1.27.0 и внешние зависимости не скачиваются в этой среде. Полный прогон, CI, реальные TLS/mTLS handshake, Caddy и браузерная интеграция пока не подтверждены. Перед merge:
+Тесты: config/validation, отсутствующие TLS-файлы; реальный HTTP/1.1/HTTP/2 loopback, Connect/gRPC/gRPC-Web, errors/recovery, auth, message limits, stream drain, duplicate route, bind failure, client-only и origin validation. Добавлены тесты на подмену Host, отмену чтения активного HTTP stream при закрытии клиента и запрет RPC до окончания startup. Локально Go 1.23.2: config/security/origin tests и health прошли с race detector и vet, включая реальный HTTP/1.1 loopback origin test; Go 1.27.0 и внешние зависимости не скачиваются в этой среде. Полный прогон, CI, реальные TLS/mTLS handshake, Caddy и браузерная интеграция пока не подтверждены. Перед merge:
 
 ```sh
 go mod tidy

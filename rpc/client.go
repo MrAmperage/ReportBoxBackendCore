@@ -34,32 +34,10 @@ type Client struct {
 	cfg                               ClientConfig
 	production                        bool
 	active                            atomic.Bool
+	lifetime                          context.Context
+	cancel                            context.CancelFunc
 	tls, plain, h2c                   *http.Transport
 	tlsClient, plainClient, h2cClient *http.Client
-}
-
-type originClient struct {
-	client       *http.Client
-	scheme, host string
-}
-
-func (c originClient) Do(r *http.Request) (*http.Response, error) {
-	if r.URL.Scheme != c.scheme || !strings.EqualFold(r.URL.Host, c.host) {
-		return nil, errors.New("RPC target origin mismatch")
-	}
-	return c.client.Do(r)
-}
-
-type gatedTransport struct {
-	active    *atomic.Bool
-	transport *http.Transport
-}
-
-func (t gatedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if !t.active.Load() {
-		return nil, errors.New("RPC client is not active")
-	}
-	return t.transport.RoundTrip(r)
 }
 
 func newClient(cfg ClientConfig, production bool) (*Client, error) {
@@ -90,16 +68,20 @@ func (c *Client) open(ctx context.Context) error {
 	c.plain = transport(true, false, false)
 	c.h2c = transport(false, false, true)
 	client := func(t *http.Transport) *http.Client {
-		return &http.Client{Transport: gatedTransport{active: &c.active, transport: t}, Timeout: c.cfg.CallTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		return &http.Client{Transport: t, Timeout: c.cfg.CallTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	c.tlsClient = client(c.tls)
 	c.plainClient = client(c.plain)
 	c.h2cClient = client(c.h2c)
+	c.lifetime, c.cancel = context.WithCancel(context.Background())
 	c.active.Store(true)
 	return nil
 }
 func (c *Client) close(context.Context) error {
 	c.active.Store(false)
+	if c.cancel != nil {
+		c.cancel()
+	}
 	for _, t := range []*http.Transport{c.tls, c.plain, c.h2c} {
 		if t != nil {
 			t.CloseIdleConnections()
@@ -141,5 +123,5 @@ func (c *Client) Target(endpoint string, protocol Protocol, extra ...connect.Cli
 	} else {
 		hc = c.plainClient
 	}
-	return Target{BaseURL: strings.TrimSuffix(u.String(), "/"), HTTPClient: originClient{client: hc, scheme: u.Scheme, host: u.Host}, Options: opts}, nil
+	return Target{BaseURL: strings.TrimSuffix(u.String(), "/"), HTTPClient: originClient{client: hc, scheme: u.Scheme, host: u.Host, lifetime: c.lifetime, active: &c.active}, Options: opts}, nil
 }

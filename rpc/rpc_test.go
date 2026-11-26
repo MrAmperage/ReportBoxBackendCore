@@ -13,6 +13,7 @@ import (
 	core "github.com/MrAmperage/ReportBoxBackendCore"
 	"github.com/MrAmperage/ReportBoxBackendCore/app"
 	"github.com/MrAmperage/ReportBoxBackendCore/config"
+	"github.com/MrAmperage/ReportBoxBackendCore/lifecycle"
 	"github.com/MrAmperage/ReportBoxBackendCore/rpc"
 	"go.uber.org/fx"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -292,5 +293,56 @@ func TestStreamingDrain(t *testing.T) {
 	}
 	if ss.Receive() || ss.Err() != nil {
 		t.Fatalf("stream did not finish gracefully: %v", ss.Err())
+	}
+}
+
+// A listener may be bound and serving before other participants have finished
+// activation, but it must not admit business requests until Core is Running.
+func TestAdmissionDuringStartup(t *testing.T) {
+	var s *rpc.Server
+	var c *rpc.Client
+	cfg := rpc.DefaultServerConfig()
+	cfg.Address = "127.0.0.1:0"
+	a := core.NewWithConfig(app.Info{Name: "startup-admission"}, config.Defaults(), rpc.ServerModule(cfg), rpc.ClientModule(rpc.DefaultClientConfig()), rpc.ProvideHandler(func() rpc.Handler { return registration(nil) }), fx.Populate(&s, &c), fx.Provide(fx.Annotate(func(server *rpc.Server) lifecycle.Participant {
+		return lifecycle.Participant{Name: "test.startup", DependsOn: []string{"rpc.server"}, Activate: func(ctx context.Context) error {
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+server.Address()+unary, strings.NewReader(`"hello"`))
+			if err != nil {
+				return err
+			}
+			req.Header.Set("Content-Type", "application/json")
+			response, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return err
+			}
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusServiceUnavailable {
+				return errors.New("RPC admitted before startup completed")
+			}
+			return nil
+		}}
+	}, fx.ResultTags(`group:"backendcore.lifecycle"`))))
+	if err := a.Err(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		stop, done := context.WithTimeout(context.Background(), 5*time.Second)
+		defer done()
+		if err := a.Stop(stop); err != nil {
+			t.Error(err)
+		}
+	}()
+	target, err := c.Target("http://"+s.Address(), rpc.Connect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := connect.NewClient[wrapperspb.StringValue, wrapperspb.StringValue](target.HTTPClient, target.BaseURL+unary, target.Options...)
+	response, err := client.CallUnary(ctx, connect.NewRequest(wrapperspb.String("hello")))
+	if err != nil || response.Msg.Value != "hello" {
+		t.Fatalf("RPC not admitted after startup: %v %v", response, err)
 	}
 }
