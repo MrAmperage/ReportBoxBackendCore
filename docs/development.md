@@ -10,7 +10,7 @@
 | 1 | app/config/logging/lifecycle/health, корневой API | Минимальный процесс стартует, останавливается по сигналу, валидирует config; тесты rollback и timeout |
 | 2 | RPC (ConnectRPC server/client) | Go-to-Go и browser через Caddy, HTTP/2 interoperability, deadlines, auth hooks, drain |
 | 3 | NATS + JetStream | Публикация, durable consumer, redelivery, reconnect, drain и duplicate |
-| 4 | PostgreSQL | Пул, readiness, управляемое закрытие |
+| 4 | PostgreSQL + GORM | Общий пул, CRUD, транзакции, readiness, управляемое закрытие |
 | 5 | Management | Закрытые health endpoints, bind failure, shutdown |
 | 6 | Telemetry | Метрики, trace через RPC/event, управляемый flush |
 | 7 | Examples, интеграционный CI, документация и release | Воспроизводимая сборка, примеры потребителей, первый тег v0.x |
@@ -19,9 +19,11 @@
 
 Этап 1–2: Core и RPC присутствуют в `main` (`b077f03`). Содержимое main и RPC на момент перехода совпало (44 файла). Владелец сообщил о локальной проверке и обновлении main; конкретные логи тестов не предоставлены. CI workflow отсутствовал в main, запусков Actions не найдено. Реальные Caddy/browser и TLS/mTLS сценарии отдельно не подтверждены. См. [Core](core.md), [RPC](rpc.md), [ADR 0004](adr/rpc.md).
 
-Этап 3: NATS + JetStream опубликованы в ветке `NATS` (`5651a5d`). Ревизия этого коммита: добавлены sticky readiness для ошибок ACL/лимита подписок, проверка статуса при startup, фиксация ошибочного disconnect при drain, учёт транспортных ошибок ACK/NAK, восстановление readiness после успешного pull и отказ от Fetch во время известного reconnect. Публичный API и зависимости не изменены. См. [API](nats.md) и [ADR 0005](adr/nats.md). Добавлены regression tests на policy latch, ACK/NAK, forced cancel и Core ForceReconnect. Повторно прошли только независимые config tests с race, config vet и gofmt nats/jetstream. `go test ./...` заблокирован недоступностью DNS для Go proxy при скачивании Go 1.27.0; Docker и broker отсутствуют. Новые тесты не запущены. Workflow `.github/workflows/go.yml` отсутствует в опубликованном коммите; включён в архив ревизии отдельно. Публикация исправлений ещё не подтверждена.
+Этап 3: NATS и JetStream перенесены в `main` (`6dacff9`). Проверено совпадение всех 59 файлов с веткой `NATS` (`6c1f54a`). Владелец сообщил о переносе, но конкретные результаты полной сборки и интеграционных тестов не предоставлены. CI отсутствует в main. См. [NATS](nats.md) и [ADR 0005](adr/nats.md); сохраняются указанные там ограничения reconnect/Fetch и ACL.
 
-**Следующий шаг:** загрузить ревизию в NATS, включая скрытый workflow; выполнить `go mod tidy`, `go mod verify`, format/vet/test/race/build, запустить интеграционные тесты с изолированным broker (см. [пример](../examples/messaging-demo/README.md)). Проверить ACL/TLS, длительный disconnect/reconnect, восстановление Core/JetStream, отсутствие накопления inbox subscriptions при сбое Fetch, queue groups, forced shutdown и ACK до Close. При необходимости устранить выявленные проблемы до production. После успешной проверки и принятия модуля слить NATS в main и перейти к PostgreSQL. Передавать актуальное состояние в документации согласно [AGENTS.md](../AGENTS.md#8-преемственность-между-диалогами).
+Этап 4: ветка `PostgreSQL` создана от `6dacff9`; подготовлен кандидат `postgres` + `postgres/orm` с GORM как предпочтительным прикладным API. См. [PostgreSQL](postgres.md) и [ADR 0006](adr/postgres.md). Публикация кандидата и полная сборка не подтверждены. Go 1.23.2 локально: тесты config и ORM gate с race, vet этих файлов прошли в режиме без модулей. `go mod tidy` заблокирован DNS Go proxy при скачивании Go 1.27.0. Checksums добавлены из опубликованных go.sum зависимостей/потребителей; требуется проверка Go toolchain, `go mod tidy` и `go mod verify`. Интеграционные тесты требуют изолированной PostgreSQL; Docker/psql в локальной среде отсутствуют. Workflow предложен, но в ветке-основе его нет.
+
+**Следующий шаг:** загрузить кандидата PostgreSQL, выполнить `go mod tidy`, format/vet/test/race/build, интеграционные тесты PostgreSQL и GORM (см. [пример](../examples/postgres-demo/README.md)), проверить TLS, rollback, исчерпание общего пула и shutdown. Провести ревизию, после успешных проверок слить в main. Затем перейти к Management. Передавать актуальное состояние согласно [AGENTS.md](../AGENTS.md#8-преемственность-между-диалогами).
 
 UI публикуется отдельно через Caddy, вне этапов Go-модулей. См. [ADR 0003](adr/edge.md) и [HTTP/Frontend](http-frontend.md).
 
