@@ -2,7 +2,11 @@ module github.com/MrAmperage/ReportBoxBackendCore
 
 go 1.27.0
 
-require go.uber.org/fx v1.24.0
+require (
+	connectrpc.com/connect v1.19.1
+	go.uber.org/fx v1.24.0
+	google.golang.org/protobuf v1.36.9
+)
 
 require (
 	go.uber.org/dig v1.19.0 // indirect

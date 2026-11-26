@@ -14,13 +14,15 @@
 
 Не вводить второй обязательный RPC-протокол через NATS. Kafka, RabbitMQ и Watermill не входят в базовый стек. Отдельные grpc-go server и gateway не требуются; обычные gRPC-клиенты могут вызывать совместимые ConnectRPC handlers. gRPC-Web поддерживается сервером, но не является обязательным browser transport.
 
-## 2. RPC (проект)
+## 2. RPC (реализация-кандидат)
+
+Реализованный API, настройки и ограничения см. в [RPC](rpc.md) и [ADR 0004](adr/rpc.md). Ниже сохраняются общие требования; при расхождении API ориентироваться на код и профильный документ.
 
 Единый пакет `rpc`, независимое подключение server/client (предлагаемые `rpc.ServerModule()` и `rpc.ClientModule()`; сигнатуры определить при реализации). Сервер управляет `net/http.Server`, listener и регистрацией generated handlers из Protobuf. Клиенты используют переиспользуемый настроенный HTTP transport/client; generated typed clients принадлежат сервисам. Не создавать новый транспорт на каждый RPC и не выполнять RPC в DI-конструкторах. ConnectRPC major version и совместимые версии генераторов Go/TypeScript выбрать на этапе RPC; не смешивать разные API поколений.
 
 Сервис владеет `.proto` и generated code; ядро предоставляет инфраструктуру для регистрации handlers, interceptors, deadlines, limits и lifecycle, но не доменные методы. Protobuf package `reportbox.<service>.v1`; удалённые поля резервировать, не менять семантику и номера; breaking change — новая версия. Генерировать Go и TypeScript из одной версии контракта. Место публикации контрактов, Buf/protoc и service discovery уточнить отдельно. На старте достаточно явно заданных endpoint URLs.
 
-Server: `RPC_ADDRESS=:9090` (предложение), read-header/idle timeouts, limits сообщений и concurrency, TLS/mTLS или явно разрешённый h2c в изолированной сети. Поддержка HTTP/2 обязательна для нативного gRPC, для h2c можно использовать `http.Server.Protocols` при поддерживаемой Go. Проверить реальные сетевые вызовы, не только httptest. Для browser Connect использовать unary и server streaming; client/bidi streaming не обещать стандартному fetch-транспорту. Для внутренних Go-вызовов streaming возможен при подходящем HTTP/2. Не ставить единый короткий WriteTimeout на длительные streams; для каждого RPC/stream установить подходящий bounded deadline и ограничение размера сообщения. Retry только для идемпотентных операций, с backoff/jitter и общим deadline; login/изменяющие операции не повторять автоматически.
+Server: `RPC_ADDRESS=127.0.0.1:9090` (default кандидата), read-header/idle timeouts, limits сообщений и concurrency, TLS/mTLS или явно разрешённый h2c в изолированной сети. Поддержка HTTP/2 обязательна для нативного gRPC, для h2c можно использовать `http.Server.Protocols` при поддерживаемой Go. Проверить реальные сетевые вызовы, не только httptest. Для browser Connect использовать unary и server streaming; client/bidi streaming не обещать стандартному fetch-транспорту. Для внутренних Go-вызовов streaming возможен при подходящем HTTP/2. Не ставить единый короткий WriteTimeout на длительные streams; для каждого RPC/stream установить подходящий bounded deadline и ограничение размера сообщения. Retry только для идемпотентных операций, с backoff/jitter и общим deadline; login/изменяющие операции не повторять автоматически.
 
 Interceptors: request/trace ID, structured logging, telemetry (опционально), recovery, authn/authz hooks. Публичные и внутренние protobuf services или процедуры явно разграничены; routing allowlist Caddy — дополнительная граница, не замена авторизации. Не доверять metadata identity от клиента; сервисная идентичность и TLS-политика требуют согласования до production. Reflection не публиковать. Проверку готовности удалённого сервиса выполнять явно при необходимости, а не считать создание клиента доказательством его доступности.
 
@@ -36,7 +38,7 @@ Interceptors: request/trace ID, structured logging, telemetry (опционал�
 
 Lifecycle: участник Open синхронно bind, Activate запускает Serve, Quiesce закрывает admission, Drain ждёт запросы через Shutdown с выделенным deadline, затем при необходимости Close и отмена lifetime contexts. Закрытие DB/NATS только после drain; фоновые ошибки Serve передаются lifecycle.ReportFailure. Для активных streams определить отдельный stop signal и тестировать завершение. Clients закрывают idle connections после завершения обработчиков; запросы отменяются собственными контекстами. Не открывать сокеты до startup; пассивные transport/client объекты допустимы до Open при отсутствии сетевых операций. Management HTTP остаётся независимым; gRPC health compatibility — опциональная возможность, не отдельный публичный listener.
 
-Критерии готовности: два Go-сервиса с typed clients, Angular/TS unary и server streaming через Caddy, native gRPC interoperability по HTTP/2, отказ для запрещённых процедур, deadline/cancellation, limits, mapping ошибок, trace propagation, bind failure, drain и forced close. Точный API и зависимости выбрать в ветке RPC.
+Критерии готовности: два Go-сервиса с typed clients, Angular/TS unary и server streaming через Caddy, native gRPC interoperability по HTTP/2, отказ для запрещённых процедур, deadline/cancellation, limits, mapping ошибок, trace propagation, bind failure, drain и forced close. Кандидат API и версии определены в ветке RPC; полные проверки до merge обязательны.
 
 ## 3. NATS Core
 
