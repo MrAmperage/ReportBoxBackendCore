@@ -24,7 +24,7 @@ Caddy уже развёрнут; ConnectRPC позволяет не вводит
 | Go-to-Go default gRPC; браузер Connect; RPC server/client в `rpc` | RPC |
 | Версия ConnectRPC и API, генерация Buf/protoc и TS, схема contracts/service discovery | RPC |
 | Same-origin, явный allowlist публичных процедур, h2c только в изолированной сети, TLS/mTLS между хостами | RPC/deployment |
-| Порты 9090 RPC и 8081 management внутри контейнера; host bindings на loopback при host Caddy | RPC/deployment |
+| Порт 9090 RPC; management default 127.0.0.1:7613 (см. [ADR 0007](management.md)); host bindings на loopback при host Caddy | RPC/deployment |
 | URL `/microfrontends/<service>/<build-id>/...`, immutable releases, manifest switch и retention | UI deployment |
 | Federation mode, auth/CSRF, routing policy и реальная Caddy конфигурация | UI/RPC deployment |
 | NATS envelope, provisioning, DLQ; миграции PostgreSQL; telemetry exporter | Соответствующие модули |
