@@ -25,6 +25,8 @@
 | [docs/http-frontend.md](docs/http-frontend.md) | Caddy, management, frontend deployment, CORS и cache |
 | [docs/rpc.md](docs/rpc.md) | Реализованный кандидат RPC, конфигурация и lifecycle |
 | [docs/adr/rpc.md](docs/adr/rpc.md) | ADR реализации RPC, ограничения и проверки |
+| [docs/nats.md](docs/nats.md) | API кандидата NATS и JetStream, конфигурация и lifecycle |
+| [docs/adr/nats.md](docs/adr/nats.md) | ADR этапа NATS, решения и ограничения |
 | [docs/messaging.md](docs/messaging.md) | ConnectRPC, NATS, JetStream и контракты |
 | [docs/infrastructure.md](docs/infrastructure.md) | PostgreSQL, observability и безопасность |
 | [docs/development.md](docs/development.md) | Этапы реализации, тестирование и выпуск |
