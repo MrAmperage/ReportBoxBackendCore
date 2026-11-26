@@ -3,7 +3,9 @@ package management
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
+	"strings"
 )
 
 type statusResponse struct {
@@ -33,12 +35,52 @@ func status(w http.ResponseWriter, r *http.Request, healthy bool) {
 		writeJSON(w, r, http.StatusServiceUnavailable, statusResponse{"unavailable"})
 	}
 }
+
+// validHost protects the default loopback listener from DNS rebinding.
+// Remote mode deliberately permits service DNS names on a private network.
+func (s *Server) validHost(authority string) bool {
+	bound := s.Address()
+	if bound == "" {
+		bound = s.cfg.Address
+	}
+	host, port, err := net.SplitHostPort(bound)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	if !ip.IsLoopback() {
+		return s.cfg.AllowRemote
+	}
+	requestHost, requestPort, err := net.SplitHostPort(authority)
+	if err != nil {
+		// HTTP clients normally omit the default HTTP port from Host.
+		if port != "80" {
+			return false
+		}
+		requestHost, requestPort = authority, "80"
+		if strings.HasPrefix(authority, "[") && strings.HasSuffix(authority, "]") {
+			requestHost = authority[1 : len(authority)-1]
+		}
+	}
+	if requestPort != port {
+		return false
+	}
+	return strings.EqualFold(requestHost, "localhost") || ip.Equal(net.ParseIP(requestHost))
+}
+
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if !s.validHost(r.Host) {
+		http.Error(w, "invalid host", http.StatusMisdirectedRequest)
+		return
+	}
 	path := r.URL.Path
 	// No redirects, aliases, debug endpoints or arbitrary application routes.
-	if r.URL.RawPath != "" || r.URL.RawQuery != "" || r.URL.ForceQuery || (path != "/livez" && path != "/readyz" && path != "/healthz" && path != "/metrics") || (path == "/metrics" && s.metrics == nil) {
+	if r.URL.IsAbs() || r.URL.RawPath != "" || r.URL.RawQuery != "" || r.URL.ForceQuery || (path != "/livez" && path != "/readyz" && path != "/healthz" && path != "/metrics") || (path == "/metrics" && s.metrics == nil) {
 		http.NotFound(w, r)
 		return
 	}

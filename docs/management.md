@@ -31,6 +31,8 @@ MANAGEMENT_ALLOW_REMOTE=true
 
 Не публиковать этот порт через Docker `ports` или публичный Caddy. На loopback контейнера доступен только из его network namespace; для удалённого scrape нужна изолированная сеть, ACL и при необходимости отдельный защищённый транспорт. Сервер не реализует TLS, аутентификацию или публичный API. `AllowRemote` не обеспечивает безопасность сети сам по себе.
 
+Для loopback listener HTTP Host должен содержать фактически занятый порт и IP listener либо `localhost` (без порта допускается только при порте 80). Остальные Host отклоняются с HTTP 421 до запуска probes: это ограничивает DNS rebinding. Для явно разрешённого non-loopback listener допускаются DNS-имена сервисов в приватной сети, защита обеспечивается deployment. Проверка Host не является аутентификацией.
+
 ## Endpoints
 
 | Path | 200 | 503 |
@@ -40,7 +42,7 @@ MANAGEMENT_ALLOW_REMOTE=true
 | `/healthz` | Running, полный probe, все checks успешны | Любой check failed (в том числе optional), incomplete, overload или shutdown |
 | `/metrics` | Определяется подключённым metrics handler | Не Running, overload или shutdown |
 
-Без metrics handler `/metrics` возвращает 404. `/healthz` — диагностический endpoint, не readiness/liveness: optional check может дать 503 только на `/healthz`. Проверки выполняются один раз на запрос, без отдельного readiness probe внутри `/healthz`. Реестр проверяет зависимости последовательно с общим бюджетом 2s; ожидание реестра входит в бюджет. Liveness вообще не запускает checks и не ждёт лимит дорогих запросов. При исчерпании общего лимита `/readyz`, `/healthz`, `/metrics` получают 503 без очереди; `/livez` не зависит от этого лимита.
+Без metrics handler `/metrics` возвращает 404. `/healthz` — диагностический endpoint, не readiness/liveness: optional check может дать 503 только на `/healthz`. Проверки выполняются один раз на запрос, без отдельного readiness probe внутри `/healthz`. Panic внутри отдельного check трактуется как unhealthy, остальные проверки продолжаются в рамках бюджета; значение panic не публикуется и не логируется. Реестр проверяет зависимости последовательно с общим бюджетом 2s; ожидание реестра входит в бюджет. Liveness вообще не запускает checks и не ждёт лимит дорогих запросов. При исчерпании общего лимита `/readyz`, `/healthz`, `/metrics` получают 503 без очереди; `/livez` не зависит от этого лимита.
 
 Примеры JSON:
 
@@ -52,7 +54,7 @@ MANAGEMENT_ALLOW_REMOTE=true
 {"status":"unavailable","complete":true,"checks":[{"name":"postgres.pool","healthy":false}]}
 ```
 
-`complete=false` означает, что все результаты получить не удалось или фаза уже не Running; список может быть частичным или пустым. Не возвращаются DSN, raw errors, stack trace и конфигурация. Имена checks — технические идентификаторы, не включать в них секреты или пользовательские данные. Метрики также не должны содержать чувствительных значений. Разрешены только GET/HEAD, без тела, query string и нестандартных путей; неизвестные пути 404, неверный метод 405, тело 400. Health-ответы JSON, ошибки маршрутизации стандартные текстовые. `Cache-Control: no-store`; нет pprof, CORS или произвольных routes. HTTP/1.1, ограничения header/read/write/idle и контекст запроса. Лимит активной работы не является лимитом TCP-соединений; сетевые ACL и cooperative deadlines обязательны.
+`complete=false` означает, что все результаты получить не удалось или фаза уже не Running; список может быть частичным или пустым. Не возвращаются DSN, raw errors, stack trace и конфигурация. Имена checks — технические идентификаторы, не включать в них секреты или пользовательские данные. Метрики также не должны содержать чувствительных значений. Разрешены только GET/HEAD, без тела, query string, absolute-form request target и нестандартных путей; неизвестные пути 404, неверный метод 405, тело 400. Health-ответы JSON, ошибки маршрутизации стандартные текстовые. `Cache-Control: no-store`; нет pprof, CORS или произвольных routes. HTTP/1.1, ограничения header/read/write/idle и контекст запроса. Лимит активной работы не является лимитом TCP-соединений; сетевые ACL и cooperative deadlines обязательны.
 
 ## Lifecycle
 
@@ -60,6 +62,6 @@ MANAGEMENT_ALLOW_REMOTE=true
 
 ## Подключение Telemetry
 
-Модуль не зависит от Prometheus. Optional Fx provider возвращает `management.MetricsHandler{Handler: handler}` (обычный `http.Handler`, например будущий promhttp). Без provider `/metrics` отсутствует. Handler создаётся пассивно, должен учитывать request context; его зависимости должны жить до конца Drain всех участников. Не добавлять конкурирующие providers или глобальный metrics registry. Telemetry SDK и exporter реализуются следующим этапом.
+Модуль не зависит от Prometheus. Optional Fx provider возвращает `management.MetricsHandler{Handler: handler}` (обычный `http.Handler`, например будущий promhttp). Без provider `/metrics` отсутствует. Handler создаётся пассивно, должен учитывать request context; его зависимости должны жить до конца Drain всех участников. Не использовать обработчик, который оставляет незавершённую работу после возврата (например, не добавлять ещё один независимый timeout, завершающий HTTP-ответ раньше фонового сбора метрик); контекст и admission уже управляются Management. Не добавлять конкурирующие providers или глобальный metrics registry. Telemetry SDK и exporter реализуются следующим этапом.
 
 Пример: [examples/management-demo](../examples/management-demo/README.md).

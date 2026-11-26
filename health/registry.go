@@ -140,10 +140,20 @@ func (r *Registry) probe(ctx context.Context, requiredOnly bool) ([]Result, bool
 		if c.Timeout > 0 {
 			checkCtx, cancelCheck = context.WithTimeout(ctx, c.Timeout)
 		}
-		err := c.Run(checkCtx)
-		healthy := err == nil && checkCtx.Err() == nil
+		healthy := runCheck(checkCtx, c.Run)
 		cancelCheck()
 		results = append(results, Result{Name: c.Name, Healthy: healthy})
 	}
 	return results, ctx.Err() == nil && r.phase() == Running
+}
+
+// runCheck isolates a panic at the dependency-probe boundary. Never expose
+// the panic value: it may contain driver details or credentials.
+func runCheck(ctx context.Context, run func(context.Context) error) (healthy bool) {
+	defer func() {
+		if recover() != nil {
+			healthy = false
+		}
+	}()
+	return run(ctx) == nil && ctx.Err() == nil
 }

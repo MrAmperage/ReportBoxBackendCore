@@ -55,6 +55,10 @@ func (f *fixture) start(t *testing.T) {
 }
 func request(s *Server, method, path string, body io.Reader) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, path, body)
+	r.Host = s.Address()
+	if r.Host == "" {
+		r.Host = s.cfg.Address
+	}
 	w := httptest.NewRecorder()
 	s.serveHTTP(w, r)
 	return w
@@ -249,4 +253,91 @@ func TestForcedDrainCancelsRequest(t *testing.T) {
 		t.Fatal("handler was not canceled")
 	}
 	<-result
+}
+
+func TestLoopbackHostPolicy(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Address = "127.0.0.1:0"
+	f := newFixture(t, cfg, MetricsHandler{})
+	var calls atomic.Int32
+	if err := f.reg.Register(health.Check{Name: "probe", Required: true, Run: func(context.Context) error { calls.Add(1); return nil }}); err != nil {
+		t.Fatal(err)
+	}
+	f.start(t)
+	f.phase.Store(uint32(health.Running))
+	_, port, err := net.SplitHostPort(f.s.Address())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Timeout: time.Second}
+	defer client.CloseIdleConnections()
+	for _, tc := range []struct {
+		host string
+		code int
+	}{
+		{f.s.Address(), 200}, {"localhost:" + port, 200}, {"attacker.example:" + port, 421}, {"127.0.0.1:1", 421}, {"127.0.0.2:" + port, 421},
+	} {
+		req, err := http.NewRequest(http.MethodGet, "http://"+f.s.Address()+"/readyz", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = tc.host
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != tc.code {
+			t.Errorf("Host %q: got %d, want %d", tc.host, resp.StatusCode, tc.code)
+		}
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("rejected requests reached probes: %d", calls.Load())
+	}
+}
+
+func TestHostPolicyIPv6AndRemote(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Address = "[::1]:7613"
+	s := newFixture(t, cfg, MetricsHandler{}).s
+	for _, host := range []string{"[::1]:7613", "[0:0:0:0:0:0:0:1]:7613", "LOCALHOST:7613"} {
+		if !s.validHost(host) {
+			t.Errorf("rejected %q", host)
+		}
+	}
+	for _, host := range []string{"attacker.example:7613", "[::1]:1", "", "[::2]:7613"} {
+		if s.validHost(host) {
+			t.Errorf("accepted %q", host)
+		}
+	}
+	cfg.Address = "127.0.0.1:80"
+	s = newFixture(t, cfg, MetricsHandler{}).s
+	if !s.validHost("localhost") || s.validHost("attacker.example") {
+		t.Fatal("wrong default port handling")
+	}
+	cfg.Address = "0.0.0.0:7613"
+	cfg.AllowRemote = true
+	s = newFixture(t, cfg, MetricsHandler{}).s
+	if !s.validHost("auth-service:7613") {
+		t.Fatal("private DNS name rejected")
+	}
+}
+
+func TestProbePanicReturnsSanitized503(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Address = "127.0.0.1:0"
+	f := newFixture(t, cfg, MetricsHandler{})
+	if err := f.reg.Register(health.Check{Name: "database", Required: true, Run: func(context.Context) error { panic("private password") }}); err != nil {
+		t.Fatal(err)
+	}
+	f.start(t)
+	f.phase.Store(uint32(health.Running))
+	expect(t, request(f.s, "GET", "/readyz", nil), 503)
+	w := request(f.s, "GET", "/healthz", nil)
+	expect(t, w, 503)
+	if !strings.Contains(w.Body.String(), `"complete":true`) || !strings.Contains(w.Body.String(), `"healthy":false`) || strings.Contains(w.Body.String(), "private") {
+		t.Fatal(w.Body.String())
+	}
+	expect(t, request(f.s, "GET", "/livez", nil), 200)
+	expect(t, request(f.s, "GET", "http://"+f.s.Address()+"/livez", nil), 404)
 }
