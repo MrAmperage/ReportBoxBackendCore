@@ -12,24 +12,11 @@ Readiness проверяет обязательную БД с коротким d
 
 ## 2. Observability
 
-`telemetry.Module()` опционален. Использует OpenTelemetry SDK для traces, стандартные W3C propagators и OTLP exporter; Prometheus endpoint на management listener. При отсутствии модуля транспорт использует no-op tracing и отключённые метрики, а не требует регистрации SDK. Предлагаемая точка расширения — явные provider/propagator и опциональный metrics registerer; не создавать конкурирующие Fx providers одного типа в core и telemetry. Management принимает optional Fx value `management.MetricsHandler` (см. [API](management.md)); без handler `/metrics` возвращает 404; registry не зависит от наличия HTTP listener. Сервис не зависит от доступности коллектора. Не считать отказ экспортера причиной liveness/readiness, если это явно не требуется политикой. Экспортер не блокирует приложение бесконечно, буферы ограничены. На остановке flush/shutdown выполняются с дедлайном.
+`telemetry.Module()` опционален: отдельный Prometheus registry, process/Go runtime collectors, OpenTelemetry SDK и OTLP HTTP/protobuf export при заданном endpoint. Management принимает `management.MetricsHandler`; без provider `/metrics` возвращает 404. Подключение collector не является условием readiness/liveness. Провайдер и exporter создаются при Open; queue ограничена, shutdown пытается завершить экспорт в lifecycle deadline. Без модуля транспорт работает без активных метрик и SDK.
 
-Resource attributes: `service.name`, `service.version`, `service.instance.id` (если доступен), `deployment.environment.name`. Предлагаемые настройки: стандартные `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG`, явная политика TLS. Tracing: ConnectRPC client и server (включая gRPC protocol), management HTTP при необходимости, JetStream publish/process, при необходимости DB; пропагация через headers/metadata. Не переносить credentials через baggage, не захватывать тело запросов и query values по умолчанию. Использовать явные provider/registry для тестов вместо неуправляемого global state.
+Встроенные RPC unary/streaming, Core NATS receive, JetStream process/ack/nak и GORM metrics; pgxpool и NATS статистика снимаются локально, без сетевых запросов при scrape. `slog` добавляет Trace ID/Span ID из context. Native publishers передают W3C trace context явно через `Runtime.Propagator()`. Не переносить credentials через baggage, SQL, headers, query values или payload в телеметрию. Не использовать UUID, message IDs, динамические subjects и тексты ошибок как labels.
 
-Metrics (имена проектные):
-
-| Метрика | Тип | Labels (ограниченный набор) |
-|---|---|---|
-| `http_requests_total` | Counter | method, route, status_class |
-| `http_request_duration_seconds` | Histogram | method, route |
-| `rpc_requests_total` | Counter | service, method, protocol, code |
-| `rpc_request_duration_seconds` | Histogram | service, method, protocol |
-| `nats_connected` | Gauge | — |
-| `jetstream_messages_total` | Counter | consumer, outcome |
-| `jetstream_handler_duration_seconds` | Histogram | consumer |
-| `postgres_pool_connections` | Gauge | state |
-
-Конкретные имена сверяются с выбранной instrumentation, чтобы не дублировать встроенные метрики. Не использовать user_id, UUID, произвольные URL, message IDs или тексты ошибок как labels. Metrics endpoint защищён сетью; отключение или отсутствие telemetry не ломает management. Логи, traces и метрики связываются через request/trace ID, но не через неограниченные metric labels.
+Конфигурация, фактические имена метрик, lifecycle, ограничения и примеры описаны в [Telemetry](telemetry.md) и [ADR 0008](adr/telemetry.md).
 
 ## 3. Безопасность по умолчанию
 

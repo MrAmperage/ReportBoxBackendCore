@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/MrAmperage/ReportBoxBackendCore/internal/observe"
 	"github.com/MrAmperage/ReportBoxBackendCore/lifecycle"
 	"github.com/MrAmperage/ReportBoxBackendCore/postgres"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -20,26 +21,35 @@ import (
 const ParticipantName = "postgres.orm"
 
 type owner struct {
-	pool *postgres.Pool
-	gate *gate
-	db   *gorm.DB
-	log  *slog.Logger
+	pool     *postgres.Pool
+	observer *observe.Instruments
+	gate     *gate
+	db       *gorm.DB
+	log      *slog.Logger
 }
 
 var _ gorm.ConnPool = (*gate)(nil)
 var _ gorm.TxBeginner = (*gate)(nil)
 var _ gorm.GetDBConnector = (*gate)(nil)
 
-func newOwner(pool *postgres.Pool, log *slog.Logger) (*owner, error) {
+type ownerParams struct {
+	fx.In
+	Pool     *postgres.Pool
+	Log      *slog.Logger
+	Observer *observe.Instruments `optional:"true"`
+}
+
+func newOwner(p ownerParams) (*owner, error) {
+	pool, log := p.Pool, p.Log
 	g := new(gate)
-	db, e := gorm.Open(dialect.New(dialect.Config{Conn: g}), &gorm.Config{DisableAutomaticPing: true, TranslateError: true, NowFunc: func() time.Time { return time.Now().UTC() }, Logger: safeLogger{log: log, level: gormlog.Warn, slow: 200 * time.Millisecond}})
+	db, e := gorm.Open(dialect.New(dialect.Config{Conn: g}), &gorm.Config{DisableAutomaticPing: true, TranslateError: true, NowFunc: func() time.Time { return time.Now().UTC() }, Logger: safeLogger{log: log, observer: p.Observer, level: gormlog.Warn, slow: 200 * time.Millisecond}})
 	if e != nil {
 		return nil, errors.New("GORM initialization failed")
 	}
-	return &owner{pool: pool, gate: g, db: db, log: log}, nil
+	return &owner{pool: pool, observer: p.Observer, gate: g, db: db, log: log}, nil
 }
 func (o *owner) participant() lifecycle.Participant {
-	return lifecycle.Participant{Name: ParticipantName, DependsOn: []string{postgres.ParticipantName}, Open: o.open, Close: o.close}
+	return lifecycle.Participant{Name: ParticipantName, DependsOn: o.observer.Dependencies(postgres.ParticipantName), Open: o.open, Close: o.close}
 }
 func (o *owner) open(ctx context.Context) error {
 	if e := ctx.Err(); e != nil {

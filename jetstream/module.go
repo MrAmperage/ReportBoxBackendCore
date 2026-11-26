@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/MrAmperage/ReportBoxBackendCore/health"
+	"github.com/MrAmperage/ReportBoxBackendCore/internal/observe"
 	"github.com/MrAmperage/ReportBoxBackendCore/lifecycle"
 	broker "github.com/MrAmperage/ReportBoxBackendCore/nats"
 	native "github.com/nats-io/nats.go/jetstream"
@@ -82,8 +83,9 @@ func ProvideConsumer(constructor any) fx.Option {
 
 type consumerParams struct {
 	fx.In
-	Client *Client
-	Health *health.Registry
-	Logger *slog.Logger
-	Specs  []Consumer `group:"backendcore.jetstream.consumers"`
+	Client   *Client
+	Health   *health.Registry
+	Logger   *slog.Logger
+	Observer *observe.Instruments `optional:"true"`
+	Specs    []Consumer           `group:"backendcore.jetstream.consumers"`
 }

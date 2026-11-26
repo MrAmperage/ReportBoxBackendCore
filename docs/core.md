@@ -128,3 +128,7 @@ fx.Provide(fx.Annotate(newParticipant,
 Целевая версия `go 1.27.0`, Fx `v1.24.0`. Core непосредственно использует только Fx; пакет RPC добавляет ConnectRPC и Protobuf в общий Go module. Первичная таблица контрольных сумм взята из публичных файлов Fx и публичных go.sum, а не сгенерирована локальной загрузкой. Перед интеграцией выполнить `go mod tidy`, проверить diff, `go test ./...`, `go test -race ./...`, `go vet ./...`, `go build ./...`. CI содержит соответствующие проверки (кроме автоматического tidy). Локально на Go 1.23.2 проверены стандартно-библиотечные пакеты; корневой API, DI и subprocess SIGTERM требуют полной проверки на целевой версии.
 
 `health.Registry.Running()` (добавлено при ревизии RPC) возвращает только фазу Running, не выполняет проверки зависимостей и не заменяет `Ready(ctx)`. Используется для admission RPC до старта и при остановке.
+
+## Telemetry
+
+`logging.New` добавляет `trace_id` и `span_id` для контекстных вызовов slog при валидном OTel SpanContext; глобальный logger/provider не меняется. См. [Telemetry](telemetry.md).

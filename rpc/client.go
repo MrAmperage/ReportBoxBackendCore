@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"connectrpc.com/connect"
+	"github.com/MrAmperage/ReportBoxBackendCore/internal/observe"
 	"github.com/MrAmperage/ReportBoxBackendCore/lifecycle"
 )
 
@@ -32,6 +33,8 @@ type Target struct {
 // Client owns the shared TLS, HTTP/1.1 and h2c client transports.
 type Client struct {
 	cfg                               ClientConfig
+	observer                          *observe.Instruments
+	streams                           streamTracker
 	production                        bool
 	active                            atomic.Bool
 	lifetime                          context.Context
@@ -47,7 +50,7 @@ func newClient(cfg ClientConfig, production bool) (*Client, error) {
 	return &Client{cfg: cfg, production: production}, nil
 }
 func (c *Client) participant() lifecycle.Participant {
-	return lifecycle.Participant{Name: "rpc.client", Open: c.open, Close: c.close}
+	return lifecycle.Participant{Name: "rpc.client", DependsOn: c.observer.Dependencies(), Open: c.open, Close: c.close}
 }
 func (c *Client) open(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
@@ -82,6 +85,7 @@ func (c *Client) close(context.Context) error {
 	if c.cancel != nil {
 		c.cancel()
 	}
+	c.streams.close()
 	for _, t := range []*http.Transport{c.tls, c.plain, c.h2c} {
 		if t != nil {
 			t.CloseIdleConnections()
@@ -106,6 +110,9 @@ func (c *Client) Target(endpoint string, protocol Protocol, extra ...connect.Cli
 	}
 	var hc *http.Client
 	opts := append([]connect.ClientOption(nil), extra...)
+	if c.observer != nil {
+		opts = append(opts, connect.WithInterceptors(clientObserver{observer: c.observer, streams: &c.streams}))
+	}
 	opts = append(opts, connect.WithReadMaxBytes(c.cfg.MaxMessageBytes), connect.WithSendMaxBytes(c.cfg.MaxMessageBytes))
 	switch protocol {
 	case GRPC:

@@ -8,6 +8,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/MrAmperage/ReportBoxBackendCore/config"
 	"github.com/MrAmperage/ReportBoxBackendCore/health"
+	"github.com/MrAmperage/ReportBoxBackendCore/internal/observe"
 	"github.com/MrAmperage/ReportBoxBackendCore/lifecycle"
 	"go.uber.org/fx"
 )
@@ -20,6 +21,7 @@ type serverParams struct {
 	Health       *health.Registry
 	Report       lifecycle.ReportFailure
 	Signal       *ShutdownSignal
+	Observer     *observe.Instruments  `optional:"true"`
 	Handlers     []Handler             `group:"backendcore.rpc.handlers"`
 	Interceptors []connect.Interceptor `group:"backendcore.rpc.interceptors"`
 }
@@ -40,7 +42,7 @@ func ServerModule(settings ...ServerConfig) fx.Option {
 		load = func() (ServerConfig, error) { return cfg, nil }
 	}
 	return fx.Module("backendcore.rpc.server", fx.Provide(load, newShutdownSignal, func(p serverParams) (*Server, error) {
-		return newServer(p.Config, strings.EqualFold(p.Core.Environment, "production"), p.Logger, p.Health, p.Report, p.Handlers, p.Interceptors, p.Signal)
+		return newServer(p.Config, strings.EqualFold(p.Core.Environment, "production"), p.Logger, p.Health, p.Report, p.Handlers, p.Interceptors, p.Signal, p.Observer)
 	}, fx.Annotate(func(s *Server) lifecycle.Participant { return s.participant() }, fx.ResultTags(`group:"backendcore.lifecycle"`))))
 }
 
@@ -55,12 +57,23 @@ func ClientModule(settings ...ClientConfig) fx.Option {
 		cfg := settings[0]
 		load = func() (ClientConfig, error) { return cfg, nil }
 	}
-	return fx.Module("backendcore.rpc.client", fx.Provide(load, func(c ClientConfig, core config.Config) (*Client, error) {
-		return newClient(c, strings.EqualFold(core.Environment, "production"))
+	return fx.Module("backendcore.rpc.client", fx.Provide(load, func(p clientParams) (*Client, error) {
+		c, err := newClient(p.Config, strings.EqualFold(p.Core.Environment, "production"))
+		if err == nil {
+			c.observer = p.Observer
+		}
+		return c, err
 	}, fx.Annotate(func(c *Client) lifecycle.Participant { return c.participant() }, fx.ResultTags(`group:"backendcore.lifecycle"`))))
 }
 
 // ProvideHandler registers a constructor returning one Handler in Fx's value group.
 func ProvideHandler(constructor any) fx.Option {
 	return fx.Provide(fx.Annotate(constructor, fx.ResultTags(`group:"backendcore.rpc.handlers"`)))
+}
+
+type clientParams struct {
+	fx.In
+	Config   ClientConfig
+	Core     config.Config
+	Observer *observe.Instruments `optional:"true"`
 }

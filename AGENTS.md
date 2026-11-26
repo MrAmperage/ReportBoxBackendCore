@@ -32,6 +32,8 @@
 | [docs/postgres.md](docs/postgres.md) | API PostgreSQL и GORM, конфигурация, lifecycle |
 | [docs/management.md](docs/management.md) | Management API, endpoints, порт и lifecycle |
 | [docs/adr/management.md](docs/adr/management.md) | ADR 0007: отдельный закрытый listener |
+| [docs/telemetry.md](docs/telemetry.md) | Telemetry API, метрики, экспорт и ограничения |
+| [docs/adr/telemetry.md](docs/adr/telemetry.md) | ADR 0008: private provider и registry |
 | [docs/infrastructure.md](docs/infrastructure.md) | PostgreSQL, observability и безопасность |
 | [docs/development.md](docs/development.md) | Этапы реализации, тестирование и выпуск |
 
@@ -61,6 +63,7 @@
 - Liveness не зависит от доступности DB/NATS; readiness отражает состояние обязательных ресурсов. Не скрывать фатальные ошибки фоновых серверов.
 - Для JetStream учитывать at-least-once, дубли, ack после устойчивого результата, ограниченные retries и идемпотентность. Не обещать exactly-once бизнес-эффекты или атомарность PostgreSQL + NATS.
 - Разрешать через Caddy только публичные RPC; проверять авторизацию внутри сервиса. Management и внутренние методы не публиковать. Для RPC учитывать HTTP/2, limits, deadlines и drain streams. Для UI deployment исключать traversal, внешние symlinks и directory listing; не выдавать HTML вместо отсутствующего chunk. Не менять существующий Caddy/NaiveProxy без отдельной проверки.
+- Telemetry опционален; не устанавливать глобальные OTel providers/propagators или Prometheus registry, не захватывать SQL, payload, URL и ошибки как span attributes/labels. Native publishers передают W3C trace context явно.
 - Не логировать токены, пароли, DSN, приватные payload и чувствительные заголовки. Не добавлять секреты в репозиторий. Не включать небезопасные настройки production без явного решения.
 - Использовать context, deadlines и ограниченную конкурентность. Не игнорировать ошибки и не допускать утечек ресурсов.
 

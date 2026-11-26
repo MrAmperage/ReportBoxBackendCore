@@ -62,6 +62,6 @@ MANAGEMENT_ALLOW_REMOTE=true
 
 ## Подключение Telemetry
 
-Модуль не зависит от Prometheus. Optional Fx provider возвращает `management.MetricsHandler{Handler: handler}` (обычный `http.Handler`, например будущий promhttp). Без provider `/metrics` отсутствует. Handler создаётся пассивно, должен учитывать request context; его зависимости должны жить до конца Drain всех участников. Не использовать обработчик, который оставляет незавершённую работу после возврата (например, не добавлять ещё один независимый timeout, завершающий HTTP-ответ раньше фонового сбора метрик); контекст и admission уже управляются Management. Не добавлять конкурирующие providers или глобальный metrics registry. Telemetry SDK и exporter реализуются следующим этапом.
+Модуль не зависит от Prometheus. Optional Fx provider возвращает `management.MetricsHandler{Handler: handler}` (обычный `http.Handler`, например promhttp). Без provider `/metrics` отсутствует. Handler создаётся пассивно, должен учитывать request context; его зависимости должны жить до конца Drain всех участников. Не использовать обработчик, который оставляет незавершённую работу после возврата (например, не добавлять ещё один независимый timeout, завершающий HTTP-ответ раньше фонового сбора метрик); контекст и admission уже управляются Management. Не добавлять конкурирующие providers или глобальный metrics registry. Провайдер подключается через `telemetry.Module()`; см. [Telemetry](telemetry.md).
 
 Пример: [examples/management-demo](../examples/management-demo/README.md).
