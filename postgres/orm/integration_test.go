@@ -135,4 +135,38 @@ func TestORMSharedPoolAndTransactions(t *testing.T) {
 	if e = gorm.G[item](db).Table(table).Create(ctx, &item{ID: 1, Name: "duplicate"}); !errors.Is(e, gorm.ErrDuplicatedKey) {
 		t.Fatalf("duplicate mapping: %v", e)
 	}
+	// A successful transaction is visible through native pgx after commit.
+	if e = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return gorm.G[item](tx).Table(table).Create(ctx, &item{ID: 3, Name: "committed"})
+	}); e != nil {
+		t.Fatal(e)
+	}
+	if e = pool.QueryRow(ctx, "SELECT name FROM "+table+" WHERE id = $1", 3).Scan(&name); e != nil || name != "committed" {
+		t.Fatalf("committed transaction not visible through pgx: %v", e)
+	}
+	// database/sql must roll back a transaction whose lifetime context is canceled.
+	txCtx, cancelTx := context.WithCancel(ctx)
+	defer cancelTx()
+	inserted := false
+	e = db.WithContext(txCtx).Transaction(func(tx *gorm.DB) error {
+		if err := gorm.G[item](tx).Table(table).Create(txCtx, &item{ID: 4, Name: "canceled"}); err != nil {
+			return err
+		}
+		inserted = true
+		cancelTx()
+		return nil
+	})
+	if !inserted {
+		t.Fatalf("test transaction failed before cancellation: %v", e)
+	}
+	if e == nil {
+		t.Fatal("canceled transaction committed")
+	}
+	if _, e = gorm.G[item](db).Table(table).Where("id = ?", 4).First(ctx); !errors.Is(e, gorm.ErrRecordNotFound) {
+		t.Fatalf("canceled transaction was not rolled back: %v", e)
+	}
+	if sqlDB.Stats().Idle != 0 {
+		t.Fatal("SQL adapter retained idle connections")
+	}
+
 }

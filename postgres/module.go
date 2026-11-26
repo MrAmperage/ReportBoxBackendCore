@@ -2,13 +2,14 @@ package postgres
 
 import (
 	"errors"
+	"log/slog"
+	"strings"
+
 	"github.com/MrAmperage/ReportBoxBackendCore/app"
 	"github.com/MrAmperage/ReportBoxBackendCore/config"
 	"github.com/MrAmperage/ReportBoxBackendCore/health"
 	"github.com/MrAmperage/ReportBoxBackendCore/lifecycle"
 	"go.uber.org/fx"
-	"log/slog"
-	"strings"
 )
 
 // Module installs PostgreSQL. Without explicit config, reads ENV.

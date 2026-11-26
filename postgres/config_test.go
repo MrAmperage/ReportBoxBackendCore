@@ -65,3 +65,37 @@ func TestLoadConfig(t *testing.T) {
 		t.Fatal("accepted empty integer")
 	}
 }
+
+func TestDriverEnvironmentPolicy(t *testing.T) {
+	c := DefaultConfig()
+	c.DSN = "postgres://u:secret@db/db?sslmode=verify-full&sslcert=client.crt&sslkey=client.key"
+	for _, key := range []string{"PGSERVICE", "PGOPTIONS", "PGCONNECT_TIMEOUT", "PGSSLCERTMODE"} {
+		t.Run(key, func(t *testing.T) {
+			value := "private-value"
+			if key == "PGSSLCERTMODE" {
+				value = "disable"
+			}
+			err := c.validateDriverEnvironment(func(k string) (string, bool) {
+				if k == key {
+					return value, true
+				}
+				return "", false
+			})
+			if err == nil || !strings.Contains(err.Error(), key) || strings.Contains(err.Error(), value) {
+				t.Fatalf("driver environment validation failed for %s", key)
+			}
+		})
+	}
+	if err := c.validateDriverEnvironment(func(k string) (string, bool) { return "", false }); err != nil {
+		t.Fatal(err)
+	}
+	// Credentials/trust files can still be supplied by the native driver.
+	if err := c.validateDriverEnvironment(func(k string) (string, bool) {
+		if k == "PGPASSWORD" {
+			return "secret", true
+		}
+		return "", false
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

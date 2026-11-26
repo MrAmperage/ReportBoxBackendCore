@@ -2,7 +2,9 @@ package postgres_test
 
 import (
 	"context"
+	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,5 +66,36 @@ func TestMissingDSNFailsDuringGraphConstruction(t *testing.T) {
 	a := backendcore.New(app.Info{Name: "postgres-invalid"}, postgres.Module(cfg))
 	if a.Err() == nil {
 		t.Fatal("invalid config accepted")
+	}
+}
+
+// A listener that never speaks PostgreSQL forces the initial handshake to time out.
+// This test requires no external database.
+func TestFailedStartupDoesNotPublishPool(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	cfg := postgres.DefaultConfig()
+	cfg.DSN = "postgres://u:startup-test-secret@" + listener.Addr().String() + "/db?sslmode=disable"
+	cfg.AllowPlaintext = true
+	cfg.ConnectTimeout = 200 * time.Millisecond
+	var owner *postgres.Pool
+	a := backendcore.New(app.Info{Name: "postgres-failed-startup"}, postgres.Module(cfg), fx.Populate(&owner))
+	if err := a.Err(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	err = a.Start(ctx)
+	if err == nil {
+		t.Fatal("startup unexpectedly succeeded")
+	}
+	if strings.Contains(err.Error(), "startup-test-secret") {
+		t.Fatal("startup error leaked a credential")
+	}
+	if _, err := owner.Native(); err == nil {
+		t.Fatal("failed startup published a pool")
 	}
 }

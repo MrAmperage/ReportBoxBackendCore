@@ -2,8 +2,11 @@ package postgres
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"log/slog"
+	"net"
+	"os"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -29,16 +32,21 @@ func newPool(c Config, production bool, info app.Info, log *slog.Logger, reg *he
 	if e := c.Validate(production); e != nil {
 		return nil, e
 	}
-	u, _ := c.endpoint()
-	cfg, e := pgxpool.ParseConfig(c.DSN)
-	if e != nil {
-		return nil, errors.New("invalid PostgreSQL driver configuration")
+	if e := c.validateDriverEnvironment(os.LookupEnv); e != nil {
+		return nil, e
 	}
-	// Do not allow ambient driver configuration to replace the explicit endpoint or TLS policy.
+	u, _ := c.endpoint()
+	// Resolve the default port explicitly so PGPORT cannot change the endpoint.
 	port := 5432
 	if u.Port() != "" {
 		port, _ = strconv.Atoi(u.Port())
 	}
+	u.Host = net.JoinHostPort(u.Hostname(), strconv.Itoa(port))
+	cfg, e := pgxpool.ParseConfig(u.String())
+	if e != nil {
+		return nil, errors.New("invalid PostgreSQL driver configuration")
+	}
+	// Do not allow ambient driver configuration to replace the explicit endpoint or TLS policy.
 	cc := cfg.ConnConfig
 	if cc.Host != u.Hostname() || int(cc.Port) != port || cc.User != u.User.Username() || cc.Database != u.Path[1:] || len(cc.Fallbacks) != 0 {
 		return nil, errors.New("PostgreSQL driver endpoint differs from explicit URL")
@@ -47,12 +55,13 @@ func newPool(c Config, production bool, info app.Info, log *slog.Logger, reg *he
 		if cc.TLSConfig == nil || cc.TLSConfig.InsecureSkipVerify || cc.TLSConfig.ServerName != u.Hostname() {
 			return nil, errors.New("PostgreSQL TLS verification required")
 		}
+		// Modify the parsed config in place to preserve pgx file-backed certificate reload.
+		cc.TLSConfig.MinVersion = tls.VersionTLS12
 	} else if cc.TLSConfig != nil {
 		return nil, errors.New("unexpected PostgreSQL TLS settings")
 	}
 	cc.ConnectTimeout = c.ConnectTimeout
-	cc.RuntimeParams["application_name"] = info.Name
-	cc.RuntimeParams["timezone"] = "UTC"
+	cc.RuntimeParams = map[string]string{"application_name": info.Name, "timezone": "UTC"}
 	cfg.MaxConns = c.MaxConns
 	cfg.MinConns = c.MinConns
 	cfg.MinIdleConns = 0
@@ -87,20 +96,28 @@ func (p *Pool) participant() lifecycle.Participant {
 	return lifecycle.Participant{Name: ParticipantName, Open: p.open, Close: p.close}
 }
 func (p *Pool) open(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, p.connectTimeout)
+	connectCtx, cancel := context.WithTimeout(ctx, p.connectTimeout)
 	defer cancel()
-	if e := ctx.Err(); e != nil {
+	if e := connectCtx.Err(); e != nil {
 		return e
 	}
-	pool, e := pgxpool.NewWithConfig(ctx, p.cfg)
+	pool, e := pgxpool.NewWithConfig(connectCtx, p.cfg)
 	if e != nil {
 		return errors.New("PostgreSQL pool initialization failed")
 	}
-	if e := pool.Ping(ctx); e != nil {
-		return errors.Join(errors.New("PostgreSQL initial ping failed"), p.closeNative(ctx, pool))
+	// The connection timeout may already have expired. Cleanup uses the
+	// caller's remaining startup budget, not the expired connection context.
+	cleanup := func(err error) error {
+		cancel()
+		cleanupCtx, done := context.WithTimeout(ctx, p.connectTimeout)
+		defer done()
+		return errors.Join(err, p.closeNative(cleanupCtx, pool))
 	}
-	if e := ctx.Err(); e != nil {
-		return errors.Join(e, p.closeNative(ctx, pool))
+	if e := pool.Ping(connectCtx); e != nil {
+		return cleanup(errors.New("PostgreSQL initial ping failed"))
+	}
+	if e := connectCtx.Err(); e != nil {
+		return cleanup(e)
 	}
 	p.pool.Store(pool)
 	return nil

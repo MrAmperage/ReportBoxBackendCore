@@ -112,3 +112,21 @@ func (c Config) Validate(production bool) error {
 	}
 	return nil
 }
+
+// validateDriverEnvironment rejects libpq settings that compete with this module's
+// explicit configuration. Credentials and trust-file defaults remain supported.
+func (c Config) validateDriverEnvironment(lookup func(string) (string, bool)) error {
+	for _, key := range []string{"PGSERVICE", "PGOPTIONS", "PGCONNECT_TIMEOUT"} {
+		if value, ok := lookup(key); ok && value != "" {
+			return errors.New("unsupported PostgreSQL driver environment: " + key)
+		}
+	}
+	u, err := c.endpoint()
+	if err != nil {
+		return err
+	}
+	if value, _ := lookup("PGSSLCERTMODE"); value == "disable" && u.Query().Get("sslcert") != "" {
+		return errors.New("PGSSLCERTMODE conflicts with explicit PostgreSQL client certificate")
+	}
+	return nil
+}
