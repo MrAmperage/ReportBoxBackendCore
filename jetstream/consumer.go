@@ -146,6 +146,16 @@ func (c *consumers) run(w *worker) {
 			}
 			continue
 		}
+		// Do not create pull inboxes during a known reconnect. A disconnect
+		// racing with Fetch is still possible inside the native library.
+		nc, err := c.p.Client.owner.Conn()
+		if err != nil || !nc.IsConnected() {
+			w.healthy.Store(false)
+			if !pause(c.pull, time.Second) {
+				return
+			}
+			continue
+		}
 		if !w.healthy.Load() {
 			ctx, cancel := context.WithTimeout(c.pull, 5*time.Second)
 			info, e := w.remote.Info(ctx)
@@ -156,17 +166,18 @@ func (c *consumers) run(w *worker) {
 				}
 				continue
 			}
-			w.healthy.Store(true)
 		}
 		pull, cancel := context.WithTimeout(c.pull, pullTimeout)
 		batch, err := w.remote.Fetch(1, native.FetchContext(pull))
+		acknowledgementsOK := true
 		if err == nil {
 			for m := range batch.Messages() {
 				c.mu.Lock()
 				admit := c.accepting && c.p.Health.Running()
 				c.mu.Unlock()
-				if admit {
-					c.handle(w, m)
+				if admit && !c.handle(w, m) {
+					acknowledgementsOK = false
+					w.healthy.Store(false)
 				}
 			}
 			err = batch.Error()
@@ -175,13 +186,19 @@ func (c *consumers) run(w *worker) {
 		if c.pull.Err() != nil {
 			return
 		}
-		if err != nil {
+		if err != nil || !acknowledgementsOK {
 			w.healthy.Store(false)
-			c.p.Logger.Warn("JetStream pull failed")
+			if err != nil {
+				c.p.Logger.Warn("JetStream pull failed")
+			}
 			if !pause(c.pull, time.Second) {
 				return
 			}
+			continue
 		}
+		// Successful validation alone is insufficient: require a successful
+		// pull (which may return zero messages) and no ack transport failure.
+		w.healthy.Store(true)
 	}
 }
 func pause(ctx context.Context, d time.Duration) bool {
@@ -194,7 +211,9 @@ func pause(ctx context.Context, d time.Duration) bool {
 		return true
 	}
 }
-func (c *consumers) handle(w *worker, m native.Msg) {
+
+// handle reports transport success, independently of the business result.
+func (c *consumers) handle(w *worker, m native.Msg) bool {
 	ctx, cancel := context.WithTimeout(c.work, w.spec.HandleTimeout)
 	metadata, err := m.Metadata()
 	if err == nil {
@@ -205,20 +224,23 @@ func (c *consumers) handle(w *worker, m native.Msg) {
 	}
 	cancel()
 	if c.work.Err() != nil {
-		return
+		return false
 	} // uncertain outcome: leave unacked
 	if err != nil {
 		c.p.Logger.Warn("JetStream handler failed")
 		if e := m.NakWithDelay(w.spec.RetryDelay); e != nil {
 			c.p.Logger.Warn("JetStream negative acknowledgement failed")
+			return false
 		}
-		return
+		return true
 	}
 	ack, done := context.WithTimeout(c.work, w.spec.AckTimeout)
 	defer done()
 	if m.DoubleAck(ack) != nil {
 		c.p.Logger.Warn("JetStream acknowledgement uncertain")
+		return false
 	}
+	return true
 }
 func invoke(ctx context.Context, fn func(context.Context, Delivery) error, d Delivery) (err error) {
 	defer func() {

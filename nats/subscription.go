@@ -92,7 +92,7 @@ func (s *subscriptions) activate(ctx context.Context) error {
 	}
 	flush, done := context.WithTimeout(ctx, s.p.Conn.cfg.ConnectTimeout)
 	defer done()
-	if err := nc.FlushWithContext(flush); err != nil || nc.LastError() != nil {
+	if err := nc.FlushWithContext(flush); err != nil || !nc.IsConnected() || s.p.Conn.policyFailed.Load() || isPolicyError(nc.LastError()) {
 		return fail()
 	}
 	return nil

@@ -70,4 +70,31 @@ func TestCoreSubscription(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("no message")
 	}
+	// The native client must restore managed subscriptions after reconnect.
+	before := nc.Stats().Reconnects
+	if err := nc.ForceReconnect(); err != nil {
+		t.Fatal(err)
+	}
+	for !nc.IsConnected() || nc.Stats().Reconnects <= before {
+		select {
+		case <-ctx.Done():
+			t.Fatal("reconnect not completed")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	if err := nc.Publish(subject, []byte("reconnected")); err != nil {
+		t.Fatal(err)
+	}
+	if err := nc.FlushWithContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-received:
+		if got != "reconnected" {
+			t.Fatal(got)
+		}
+	case <-ctx.Done():
+		t.Fatal("subscription not restored")
+	}
+
 }

@@ -2,7 +2,7 @@
 
 [Архитектура сообщений](../messaging.md) · [API NATS](../nats.md)
 
-Статус: кандидат для ветки NATS на базе `b077f03`; решения реализации предложены агентом, подлежат review. Не считать протестированным релизом.
+Статус: кандидат для ветки NATS, первоначальная публикация `5651a5d` на базе `b077f03`; ревизия подготовлена, решения реализации предложены агентом, полная сборка не подтверждена. Не считать протестированным релизом.
 
 | Решение | Мотивация |
 |---|---|
@@ -13,6 +13,9 @@
 | Existing durable pull, Fetch(1) на worker, 3s pull context, explicit DoubleAck и delayed NAK | Контролируемая concurrency, at-least-once, отдельная отмена pull и обработки. |
 | Finite MaxDeliver, bounded MaxAckPending, AckWait/BackOff validation | Не допускать бесконечный retry и очевидно несовместимую remote policy. |
 | Readiness по connection / AccountInfo / worker last result | Быстрый локальный статус и проверка доступности API, без создания/изменения streams. |
+| Sticky readiness failure при permission violation / max subscriptions | Асинхронный callback не позволяет надёжно определить конкретного потребителя; не считать reconnect гарантией прав. Восстановление после исправления политики и перезапуска. |
+| ACK/NAK failure снижает readiness; восстановление после успешного pull | Info не доказывает доступность доставки. Ошибка бизнес-обработки с успешным NAK не равна сбою транспорта. |
+| Не выполнять Fetch во время известного reconnect | Сократить создание inbox при недоступном брокере; окно гонки внутри native Fetch остаётся и требует проверки. |
 | Drain общего connection в Close, после всех participant Drain | RPC и handlers могут публиковать и ack до закрытия брокера. |
 
 Открытые вопросы: автоматический InProgress для длительных jobs, DLQ/quarantine/advisory processing, transactional outbox/inbox, контракт envelope, cluster failover/multi-endpoint, telemetry. Нативные async publish и unmanaged subscriptions требуют собственного lifecycle. Не менять production broker автоматически. Полный go mod tidy и интеграционные проверки обязательны перед утверждением. См. [план](../development.md).

@@ -19,14 +19,15 @@ import (
 
 // Connection owns the native connection. Consumers must not close it themselves.
 type Connection struct {
-	cfg         Config
-	name        string
-	logger      *slog.Logger
-	report      lifecycle.ReportFailure
-	conn        atomic.Pointer[native.Conn]
-	closing     atomic.Bool
-	drainFailed atomic.Bool
-	closed      chan struct{}
+	cfg          Config
+	name         string
+	logger       *slog.Logger
+	report       lifecycle.ReportFailure
+	conn         atomic.Pointer[native.Conn]
+	closing      atomic.Bool
+	drainFailed  atomic.Bool
+	policyFailed atomic.Bool
+	closed       chan struct{}
 }
 
 func newConnection(c Config, production bool, info app.Info, log *slog.Logger, reg *health.Registry, report lifecycle.ReportFailure) (*Connection, error) {
@@ -36,7 +37,7 @@ func newConnection(c Config, production bool, info app.Info, log *slog.Logger, r
 	o := &Connection{cfg: c, name: info.Name, logger: log, report: report, closed: make(chan struct{})}
 	if err := reg.Register(health.Check{Name: "nats.connection", Required: true, Run: func(context.Context) error {
 		nc := o.conn.Load()
-		if nc == nil || !nc.IsConnected() || o.closing.Load() {
+		if nc == nil || !nc.IsConnected() || o.closing.Load() || o.policyFailed.Load() || isPolicyError(nc.LastError()) {
 			return errors.New("NATS unavailable")
 		}
 		return nil
@@ -70,19 +71,30 @@ func (o *Connection) open(ctx context.Context) error {
 			return context.DeadlineExceeded
 		}
 	}
-	opts := []native.Option{native.Name(o.name), native.Timeout(timeout), native.DrainTimeout(o.cfg.DrainTimeout), native.MaxReconnects(o.cfg.MaxReconnect), native.ReconnectWait(o.cfg.ReconnectWait), native.ReconnectBufSize(-1), native.IgnoreDiscoveredServers(), native.DisconnectErrHandler(func(_ *native.Conn, _ error) { o.logger.Warn("NATS disconnected") }), native.ReconnectHandler(func(_ *native.Conn) { o.logger.Info("NATS reconnected") }), native.ErrorHandler(func(_ *native.Conn, _ *native.Subscription, _ error) {
-		if o.closing.Load() {
-			o.drainFailed.Store(true)
-		}
-		o.logger.Warn("NATS asynchronous error")
-	}), native.ClosedHandler(func(_ *native.Conn) {
-		close(o.closed)
-		if !o.closing.Load() {
-			if err := o.report(errors.New("NATS connection permanently closed")); err != nil {
-				o.logger.Error("NATS shutdown request failed")
+	opts := []native.Option{
+		native.Name(o.name), native.Timeout(timeout), native.DrainTimeout(o.cfg.DrainTimeout),
+		native.MaxReconnects(o.cfg.MaxReconnect), native.ReconnectWait(o.cfg.ReconnectWait),
+		native.ReconnectBufSize(-1), native.IgnoreDiscoveredServers(),
+		native.DisconnectErrHandler(func(_ *native.Conn, err error) {
+			// Normal client Close also invokes this callback, with a nil error.
+			if err != nil && o.closing.Load() {
+				o.drainFailed.Store(true)
 			}
-		}
-	})}
+			if err != nil {
+				o.logger.Warn("NATS disconnected")
+			}
+		}),
+		native.ReconnectHandler(func(_ *native.Conn) { o.logger.Info("NATS reconnected") }),
+		native.ErrorHandler(func(_ *native.Conn, _ *native.Subscription, err error) { o.noteAsyncError(err) }),
+		native.ClosedHandler(func(_ *native.Conn) {
+			close(o.closed)
+			if !o.closing.Load() {
+				if err := o.report(errors.New("NATS connection permanently closed")); err != nil {
+					o.logger.Error("NATS shutdown request failed")
+				}
+			}
+		}),
+	}
 	if o.cfg.CredentialsFile != "" {
 		opts = append(opts, native.UserCredentials(o.cfg.CredentialsFile))
 	}
@@ -123,6 +135,23 @@ func (o *Connection) open(ctx context.Context) error {
 	o.conn.Store(nc)
 	return nil
 }
+
+// Policy violations can be reported asynchronously with no subscription identity.
+// Conservatively latch readiness until restart rather than claim recovery on PONG.
+func isPolicyError(err error) bool {
+	return errors.Is(err, native.ErrPermissionViolation) || errors.Is(err, native.ErrMaxSubscriptionsExceeded)
+}
+
+func (o *Connection) noteAsyncError(err error) {
+	if isPolicyError(err) {
+		o.policyFailed.Store(true)
+	}
+	if o.closing.Load() {
+		o.drainFailed.Store(true)
+	}
+	o.logger.Warn("NATS asynchronous error")
+}
+
 func (o *Connection) close(ctx context.Context) error {
 	o.closing.Store(true)
 	nc := o.conn.Swap(nil)
