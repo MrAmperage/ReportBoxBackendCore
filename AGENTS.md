@@ -30,6 +30,8 @@
 | [docs/messaging.md](docs/messaging.md) | ConnectRPC, NATS, JetStream и контракты |
 | [docs/adr/postgres.md](docs/adr/postgres.md) | ADR 0006: GORM и общий пул PostgreSQL |
 | [docs/postgres.md](docs/postgres.md) | API PostgreSQL и GORM, конфигурация, lifecycle |
+| [docs/management.md](docs/management.md) | Management API, endpoints, порт и lifecycle |
+| [docs/adr/management.md](docs/adr/management.md) | ADR 0007: отдельный закрытый listener |
 | [docs/infrastructure.md](docs/infrastructure.md) | PostgreSQL, observability и безопасность |
 | [docs/development.md](docs/development.md) | Этапы реализации, тестирование и выпуск |
 
@@ -47,7 +49,7 @@
 - Для прикладных репозиториев PostgreSQL предпочитать GORM Generics API; `postgres/orm` опционален и использует общий pgxpool. Не вводить универсальный BaseRepository, не писать ручной SQL/Scan для обычного CRUD. Нативный pgx оставлять для специальных запросов/COPY. Не запускать AutoMigrate автоматически.
 - Использовать нативные API выбранных библиотек. Не оборачивать каждый сторонний тип ради абстракции. Не добавлять новые зависимости без обоснования.
 - Не добавлять второй обязательный RPC-стек поверх NATS. ConnectRPC — синхронные вызовы (Connect для browser, gRPC для Go как предлагаемый default), Core NATS — уведомления с допустимой потерей, JetStream — устойчивые события и задачи.
-- RPC server на net/http, без универсального REST-фреймворка. Пакет `rpc` предоставляет независимо подключаемые server/client. Management listener отдельный. Статику раздаёт Caddy, не Go; UI deployment вне ядра.
+- RPC server на net/http, без универсального REST-фреймворка. Пакет `rpc` предоставляет независимо подключаемые server/client. Management listener отдельный, default `127.0.0.1:7613`; non-loopback требует явного разрешения. Статику раздаёт Caddy, не Go; UI deployment вне ядра.
 - Сохранять совместимость публичного API после его утверждения; несовместимые изменения фиксировать явно. Точные версии Go и зависимостей брать из актуального `go.mod`, CI и утверждённых решений, не выдумывать их.
 
 ## 4. Lifecycle, надёжность и безопасность

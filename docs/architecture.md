@@ -32,7 +32,7 @@ Caddy — внешний ingress для TLS, static assets и reverse proxy; о�
 | `logging` | slog, адаптер Fx | app, config |
 | `lifecycle` | Координация запуска, остановки, состояния | app, logging |
 | `health` | Реестр проверок и состояние готовности | lifecycle |
-| `management` | Закрытый технический HTTP | health, logging, lifecycle |
+| `management` | Закрытый технический HTTP ([API](management.md)) | health, logging, lifecycle |
 | `rpc` | ConnectRPC handlers, server/client transport, interceptors | logging, lifecycle, health |
 | `nats` | Подключение, Core NATS | logging, lifecycle, health |
 | `jetstream` | Надёжные публикации и consumers | nats |

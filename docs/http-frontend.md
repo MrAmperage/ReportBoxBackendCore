@@ -10,7 +10,7 @@ Caddy выполняет TLS, статическую раздачу Angular Shel
 |---|---|---|
 | Caddy | :443 | Публичный HTTPS, статика, разрешённые RPC |
 | RPC | :9090 внутри контейнера | Connect/gRPC/gRPC-Web |
-| Management | :8081 внутри контейнера | /health/live, /health/ready, /metrics при telemetry |
+| Management | 127.0.0.1:7613 (default) | /livez, /readyz, /healthz, /metrics при telemetry |
 
 Если Caddy работает на host, публиковать backend port только на loopback (например 127.0.0.1:9001 -> 9090); для Caddy в общей Docker network использовать внутреннее DNS-имя. Не пробрасывать RPC или management в интернет напрямую. Для разных машин — TLS/mTLS и сетевые ACL; h2c только в доверенной изолированной сети. Конкретные адреса задаёт deployment.
 
@@ -68,8 +68,8 @@ Shell получает remote URL из конфигурации/manifest. Вер
 
 Не включать browse; исключить секреты, конфиги, source maps по умолчанию и symlinks за пределы root. Проверять только GET/HEAD для статики, MIME для JS/MJS/CSS/WASM/JSON, conditional GET и корректный 404. SPA fallback допустим только для маршрутов Shell, никогда для remote assets или RPC. Пример Caddy выше намеренно не содержит полной cache/SPA policy. Same-origin предпочтителен; при необходимости другого origin согласовать allowlist CORS и credentials.
 
-## 4. Management (план)
+## 4. Management
 
-Отдельный модуль на net/http без chi/Gin/Fiber. `GET /health/live` — 200 для живого процесса, `GET /health/ready` — 200 только при готовности, иначе 503; JSON без внутренних ошибок, Cache-Control: no-store. `/metrics` регистрируется при подключённой telemetry. Технические endpoints не публикуются через Caddy. Ограничить header/body/timeouts, методы и доступ к debug endpoints. Управление listener через lifecycle: Open синхронно bind, Activate запускает Serve, Quiesce прекращает intake, Drain выполняет Shutdown с дедлайном и Close при необходимости, Close освобождает listener; ошибки фонового Serve через ReportFailure. Readiness снимается до drain всех транспортов. Закрытие должно учитывать HTTP/2 streams; долгоживущие запросы имеют собственную политику завершения.
+Отдельный модуль `management.Module()` на net/http. Согласованный default `127.0.0.1:7613`; для приватной Docker network явно задать `MANAGEMENT_ADDRESS=0.0.0.0:7613` и `MANAGEMENT_ALLOW_REMOTE=true`. Не публиковать порт через Caddy. `/livez`, `/readyz`, `/healthz` и опциональный `/metrics` используют существующий Health Registry и lifecycle. Точный контракт, ограничения, конфигурация и интеграция Telemetry: [Management](management.md), [ADR 0007](adr/management.md).
 
 Источники: [Caddy reverse_proxy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy), [handle](https://caddyserver.com/docs/caddyfile/directives/handle), [file_server](https://caddyserver.com/docs/caddyfile/directives/file_server), [Connect deployment](https://connectrpc.com/docs/go/deployment/).

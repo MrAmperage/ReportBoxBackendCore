@@ -90,3 +90,32 @@ func TestRunningWithoutProbes(t *testing.T) {
 		}
 	}
 }
+
+func TestPanickingCheckDoesNotBreakRegistry(t *testing.T) {
+	phase := Idle
+	r := New(func() Phase { return phase }, time.Second)
+	shouldPanic := true
+	if err := r.Register(Check{Name: "a", Required: true, Run: func(context.Context) error {
+		if shouldPanic {
+			panic("private driver details")
+		}
+		return nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Register(Check{Name: "b", Required: true, Run: func(context.Context) error { return nil }}); err != nil {
+		t.Fatal(err)
+	}
+	phase = Running
+	if r.Ready(context.Background()) || !r.Live() {
+		t.Fatal("wrong process state after probe panic")
+	}
+	results, complete := r.Probe(context.Background())
+	if !complete || len(results) != 2 || results[0].Healthy || !results[1].Healthy {
+		t.Fatalf("unexpected results: %+v, %v", results, complete)
+	}
+	shouldPanic = false
+	if !r.Ready(context.Background()) {
+		t.Fatal("registry did not recover")
+	}
+}
