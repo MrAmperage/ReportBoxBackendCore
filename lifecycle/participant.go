@@ -7,7 +7,9 @@ import "context"
 const Group = "backendcore.lifecycle"
 
 // Participant describes one managed component. All callbacks must honor their
-// context. Open must clean up its own partial failure. Activate must undo its
+// context. A callback panic is reported as a failed phase; the coordinator
+// continues cleanup of previously opened resources. Open must clean up its
+// own partial failure (including panic). Activate must undo its
 // partial activation on error; Close will still be called after a successful Open.
 // Quiesce stops intake without waiting for ongoing work; Drain waits for it.
 // Close releases resources and must tolerate failed activation and drain.

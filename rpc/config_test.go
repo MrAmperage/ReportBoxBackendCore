@@ -72,3 +72,15 @@ func TestTLSMissingFiles(t *testing.T) {
 		t.Fatal("missing CA accepted")
 	}
 }
+
+func TestHeaderLimitOverflow(t *testing.T) {
+	c := DefaultServerConfig()
+	c.MaxHeaderBytes = int(^uint(0) >> 1)
+	if c.Validate(false) == nil {
+		t.Fatal("overflowing header limit accepted")
+	}
+	c.MaxHeaderBytes = int(^uint(0)>>1) - 4096
+	if err := c.Validate(false); err != nil {
+		t.Fatal(err)
+	}
+}

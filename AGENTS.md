@@ -36,6 +36,8 @@
 | [docs/adr/telemetry.md](docs/adr/telemetry.md) | ADR 0008: private provider и registry |
 | [docs/infrastructure.md](docs/infrastructure.md) | PostgreSQL, observability и безопасность |
 | [docs/development.md](docs/development.md) | Этапы реализации, тестирование и выпуск |
+| [docs/release.md](docs/release.md) | Release gate: проверка зависимостей, CI, smoke и публикация |
+| [docs/adr/release.md](docs/adr/release.md) | ADR 0009: решения стабилизации и политика первого выпуска |
 
 Явные указания владельца проекта имеют приоритет над этими инструкциями. Не выдавать предложения из ADR за утверждённые решения. Если исходники расходятся с согласованной спецификацией, обозначить расхождение и исправить его в пределах поставленной задачи; архитектурные изменения согласовать с владельцем. Не разрешать противоречия скрытно.
 

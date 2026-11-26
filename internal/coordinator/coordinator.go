@@ -215,10 +215,17 @@ func (c *Coordinator) release(ctx context.Context) error {
 	}
 	return errors.Join(errs...)
 }
-func call(ctx context.Context, name, phase string, fn func(context.Context) error) error {
+func call(ctx context.Context, name, phase string, fn func(context.Context) error) (err error) {
 	if fn == nil {
 		return nil
 	}
+	// A panic is a failed hook, not permission to skip other resource cleanup.
+	// Never format its value: it may contain credentials or application data.
+	defer func() {
+		if recover() != nil {
+			err = fmt.Errorf("lifecycle %s %s: callback panic", name, phase)
+		}
+	}()
 	if err := fn(ctx); err != nil {
 		return fmt.Errorf("lifecycle %s %s: %w", name, phase, err)
 	}
