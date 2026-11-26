@@ -1,87 +1,75 @@
-# HTTP и микрофронтенды
+# Caddy, микрофронтенды и management
 
-[К описанию проекта](../README.md)
+[К описанию проекта](../README.md) · [ADR 0003](adr/edge.md)
 
-## 1. HTTP-инфраструктура
+## 1. Границы ответственности
 
-Использовать `net/http`; применение chi остаётся опциональным и определяется при этапе 2. Предлагаемый default — стандартный `ServeMux`, если его возможностей достаточно. Библиотека предоставляет маршрутизатор, настройки listener, middleware, регистрацию маршрутов через DI и lifecycle. Маршруты регистрируются до старта listener; явные дубликаты и пересечения с зарезервированными префиксами должны быть выявлены до bind. Предлагается регистрация деклараций routes через DI group и один сборщик router; порядок группы не влияет на приоритет маршрутов. Не обещать автоматическое обнаружение всех семантических пересечений произвольных шаблонов стороннего router. Для `ServeMux` конфликт/невалидный pattern может вызвать panic — валидировать декларации и переводить ошибки регистрации в startup error на узкой границе. Management и application используют разные экземпляры HTTP-сервера. Frontend не открывает третий listener.
+Caddy выполняет TLS, статическую раздачу Angular Shell/remotes и reverse proxy публичных Connect RPC. KrakenD, Go-модуль frontend, embed.FS для UI и универсальный REST HTTP server исключены из базовой архитектуры. RPC server использует net/http внутри пакета `rpc`; это не дополнительный REST API. Management остаётся отдельным опциональным listener.
 
-| Listener | Default (предложение) | Пути |
+| Listener | Адрес (предложение) | Назначение |
 |---|---|---|
-| Application | `:8080` | `/api/v1/...`, `/frontend/...` |
-| Management | `:8081` | `/health/live`, `/health/ready`, `/metrics` (с telemetry) |
-| gRPC | `:9090` | protobuf RPC и gRPC health |
+| Caddy | :443 | Публичный HTTPS, статика, разрешённые RPC |
+| RPC | :9090 внутри контейнера | Connect/gRPC/gRPC-Web |
+| Management | :8081 внутри контейнера | /health/live, /health/ready, /metrics при telemetry |
 
-Management не публикуется в интернет. В Docker не пробрасывать management host port в публичную сеть; без сетевой изоляции явно bind на loopback. При развертывании в Docker/Kubernetes допускается bind на все интерфейсы внутри контейнера, но доступ ограничен сетью и политиками развертывания. Публичный TLS обычно завершается на gateway/reverse proxy. Не доверять произвольным `X-Forwarded-*`; задавать доверенные proxies. Опциональные debug endpoints закрыты по умолчанию.
+Если Caddy работает на host, публиковать backend port только на loopback (например 127.0.0.1:9001 -> 9090); для Caddy в общей Docker network использовать внутреннее DNS-имя. Не пробрасывать RPC или management в интернет напрямую. Для разных машин — TLS/mTLS и сетевые ACL; h2c только в доверенной изолированной сети. Конкретные адреса задаёт deployment.
 
-Базовые настройки HTTP: `HTTP_ADDRESS=:8080`, `HTTP_READ_HEADER_TIMEOUT=5s`, `HTTP_IDLE_TIMEOUT=60s`, `HTTP_MAX_HEADER_BYTES=1048576`; отдельные префиксы `MANAGEMENT_` для технического listener. Таймауты тела и ответа выбираются по назначению маршрутов: для обычных API задать bounded deadlines и body limit, для больших uploads — отдельный лимит и скорость/время чтения. Для streaming маршрутов (SSE, длительные загрузки) нужна отдельная политика; общий короткий WriteTimeout может нарушить их работу. Ограничение размера тела, аутентификация, rate limits и request deadlines применяются на подходящем слое.
+## 2. Маршрутизация RPC
 
-Listener открывается синхронно в OnStart (`net.Listen`); ошибка bind отменяет запуск. `Serve` выполняется в контролируемой goroutine, ошибки передаются механизму shutdown. Перед `Shutdown(ctx)` закрыть admission для новой работы и снять readiness. `Shutdown(ctx)` ожидает активные запросы, при превышении выделенного транспортного бюджета — `Close()` и отмена lifetime context. Не отменять рабочие контексты активных запросов до начала graceful drain; отслеживать долгоживущие потоки и выделять им собственный stop signal. Hijacked connections (WebSocket и подобные) требуют отдельной регистрации и закрытия.
+Предлагаемый same-origin: Angular использует URL текущего origin; RPC URL имеет стандартный путь `/reportbox.auth.v1.AuthService/Login`. Caddy сохраняет method, path, headers и trailers согласно протоколу. Не использовать `handle_path` для удаления имени RPC service. Для gRPC upstream по cleartext требуется HTTP/2 (h2c); Connect unary работает и через HTTP/1.1. Если нужен TLS upstream, использовать HTTPS и проверять сертификат.
 
-`GET /health/live` — 200 для работающего процесса, `GET /health/ready` — 200 только при readiness=true, иначе 503. Ответ JSON с минимальным статусом, `Cache-Control: no-store`. Проверки не раскрывают секреты. Metrics — только при включённом соответствующем модуле.
+Иллюстративные фрагменты site block (не готовый Caddyfile и не замена существующей конфигурации NaiveProxy):
 
-## 2. Frontend-модуль
+```caddyfile
+route {
+    @authPublic path /reportbox.auth.v1.AuthService/Login
+    handle @authPublic {
+        reverse_proxy h2c://127.0.0.1:9001
+    }
 
-Цель: каждый UI-сервис раздаёт свою сборку микрофронтенда одновременно с backend. Ядро не зависит от Angular, Webpack или Native Federation. Оно принимает `fs.FS` и обслуживает статические файлы. Публичный API — предложение:
+    @rpcUnknown path_regexp rpcUnknown ^/reportbox\.
+    handle @rpcUnknown {
+        respond 404
+    }
+}
 
-```go
-frontend.Module(
-    frontend.WithFS(dist),
-    frontend.WithPrefix("/frontend/"),
-)
-```
-
-Локальная разработка: использовать безопасный directory adapter (например `os.Root.FS()` при выбранной поддерживаемой версии Go); произвольный `os.DirFS` допустим только как доверенный источник с явно описанной границей доверия; для встраивания использовать `embed.FS` с `fs.Sub`. Выбирает режим сервис, не библиотека. Модуль активируется только при явном подключении. Проверить FS, корректность префикса, наличие настраиваемых entry-файлов на старте. Путь должен оканчиваться `/`; не пересекаться с API и техническими маршрутами.
-
-```go
-// Пример в пакете сервиса, где реально расположен каталог dist.
-//go:embed dist
-var embedded embed.FS
-
-func Files() (fs.FS, error) {
-    return fs.Sub(embedded, "dist")
+handle_path /microfrontends/* {
+    root * /srv/reportbox/microfrontends
+    header X-Content-Type-Options nosniff
+    file_server
 }
 ```
 
-Сборка Angular должна предшествовать компиляции Go. Путь `dist` соответствует фактическому output Angular; в некоторых конфигурациях файлы расположены в подкаталоге `browser`. Этот путь задаёт сервис.
+В примере Login — единственная явно разрешённая процедура. Не добавлять общий fallback reverse_proxy на RPC upstream: остальные RPC paths, включая служебные, не должны попадать на backend. В реальном deployment перечислить все публичные методы, либо выделить protobuf service, целиком предназначенный для публичного API; внутренние сервисы, reflection и health не проксировать наружу. Независимо от ingress каждый сервис проверяет credentials и права на каждую операцию; Caddy не является механизмом бизнес-авторизации. Не доверять пользовательским X-Forwarded-* или заголовкам identity. Для cookie auth определить CSRF policy; отключить CORS по умолчанию при same-origin. RPC-ошибки и trailers не превращать в HTML страницы.
 
-## 3. Публикация и интеграция с Shell
+Caddyfile необходимо адаптировать к имеющемуся кастомному build с forward_proxy, сохранив существующий порядок директив и probe resistance. Проверять `caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile` тем же бинарником, который используется в systemd; безопасно перезагрузить только после проверки. Не заменять binary стандартной сборкой без проверки наличия forward_proxy. Проверить прямой HTTPS, статику, RPC и работоспособность NaiveProxy после изменения. Не публиковать credentials и текущий Caddyfile с секретами в репозитории. Пример выше ещё не проверен на сервере.
 
-Предпочтительный вариант для ReportBox — один публичный origin с маршрутизацией по имени сервиса. Например:
+## 3. Публикация микрофронтендов
+
+Сервис владеет исходниками UI и его версией, но Go binary не раздаёт сборку. Pipeline собирает backend и Angular отдельно, публикует согласованные артефакты. Caddy читает только доверенное дерево статических ресурсов, без права записи. Предлагаемая структура:
 
 ```text
-https://app.example.com/services/reports/frontend/remoteEntry.json
-https://app.example.com/services/reports/frontend/chunk-ABC123.js
-https://app.example.com/services/reports/api/v1/reports
+/srv/reportbox/
+  shell/
+  microfrontends/
+    auth/<build-id>/remoteEntry.json
+    auth/<build-id>/chunk-ABC.js
+    reports/<build-id>/...
 ```
 
-Gateway/reverse proxy удаляет внешний префикс `/services/reports`, сохраняет остальной путь. Сервис отдаёт файлы с `/frontend/`. Сборка remote должна разрешать ссылки на chunks/assets с корректной публичной базой; проверять на реальном gateway, а не только на localhost. Альтернатива — разные origins с явно разрешённым CORS. Shell отвечает за загрузку remote, интеграцию маршрутов, совместимость shared dependencies и отображение ошибки при недоступности remote.
+Shell получает remote URL из конфигурации/manifest. Версионированный URL должен сохраняться для всех связанных chunks/assets, включая lazy loads. Публиковать новую директорию полностью до переключения manifest; сохранять предыдущие версии на период совместимости. Не перезаписывать immutable URL. Rollback переключает manifest на совместимый frontend; это не заменяет совместимость backend API. Конкретный release/rollback workflow и срок хранения утверждаются при интеграции Shell. Native Federation или Module Federation остаётся открытым выбором; Caddy не зависит от формата сборки.
 
-Выбор Module Federation (`remoteEntry.js`) или Native Federation (`remoteEntry.json`) и механизм обнаружения remote пока не утверждены. Ядро поддерживает оба способа как static assets и не навязывает формат manifest. В v0.1 достаточно конфигурации URL в Shell/gateway, без нового registry-сервиса.
-
-## 4. Безопасная раздача
-
-- Только GET и HEAD; корректные Content-Type для JS/MJS, CSS, JSON, WASM и иных ресурсов; `X-Content-Type-Options: nosniff`.
-- Не отдавать directory listings, скрытые файлы, карты исходников по умолчанию, конфиги, секреты и файлы за пределами корня. `os.DirFS` сам по себе не является защитой от symlink escape. Для поддерживаемого режима каталога использовать traversal-resistant root (`os.OpenRoot` + `Root.FS()` либо эквивалент с проверенной безопасностью), закрывать root при остановке. Для произвольного переданного `fs.FS` безопасность внутренней реализации — ответственность поставщика; ядро проверяет имена и запрещённые пути, но не обещает изоляцию недоверенного FS. Артефакты должны содержать только публичные файлы; не полагаться исключительно на blacklist. Тестировать encoded traversal, symlink escape и отсутствие directory listing.
-- Не делать SPA fallback для remote: отсутствующий chunk или manifest возвращает 404, а не index.html. Для standalone SPA — только отдельный явно включённый режим, не маскирующий ошибки assets/API.
-- Использовать условные запросы и диапазоны там, где они корректно поддерживаются FS. Для embed при необходимости вычислять стабильный ETag из содержимого или сборочного manifest, а не из текущего времени.
-- Same-origin по умолчанию. Для cross-origin — allowlist origins, `Vary: Origin` для динамического CORS; не использовать wildcard вместе с credentials. Frontend assets не содержат секретов; загрузка UI не заменяет серверную авторизацию API.
-
-## 5. Cache policy и обновление
-
-| Ресурс | Cache-Control |
+| Ресурс | Cache-Control (политика) |
 |---|---|
-| remoteEntry.js / remoteEntry.json / mf-manifest.json / index.html | `no-cache` |
-| Доказанно content-hashed assets | `public, max-age=31536000, immutable` |
-| Остальные файлы | `no-cache` |
-| Ошибки 4xx/5xx | `no-store` |
+| Изменяемый manifest, index.html, entry без build ID | no-cache |
+| Доказанно immutable URL с build ID или content hash | public, max-age=31536000, immutable |
+| Остальные | no-cache |
+| Ошибки | no-store |
 
-Нельзя считать все JS/CSS файлы хешированными; политика использует проверенный manifest или явно настроенный шаблон сборки. Версионирование frontend/backend одной сборкой обеспечивает соответствие в артефакте, но не устраняет проблемы rolling updates, старых вкладок и старых chunks. Для production предусмотреть сохранение прежних assets на период совместимости либо маршрутизацию по версии сборки; при ошибке загрузки Shell предлагает обновить страницу. Предлагаемый вариант: неизменяемый build ID в URL remote и всех его assets, хранение текущего и предыдущих наборов на общем статическом origin/repository (или version-aware routing); entry URL выбирается manifest Shell. Для локального одиночного сервиса допустима простая схема с обязательным reload при несовместимости. При rolling deployment один новый binary с embed не гарантирует доступность старых chunks на любой реплике. Не включать immutable для файла, чей URL может обозначать другое содержимое. Конкретная production-стратегия rollout утверждается отдельно до многорепличного развертывания.
+Не включать browse; исключить секреты, конфиги, source maps по умолчанию и symlinks за пределы root. Проверять только GET/HEAD для статики, MIME для JS/MJS/CSS/WASM/JSON, conditional GET и корректный 404. SPA fallback допустим только для маршрутов Shell, никогда для remote assets или RPC. Пример Caddy выше намеренно не содержит полной cache/SPA policy. Same-origin предпочтителен; при необходимости другого origin согласовать allowlist CORS и credentials.
 
-## 6. Контейнеризация
+## 4. Management (план)
 
-Рекомендуемый вариант — multi-stage Docker build: Node stage (`npm ci`, build), Go stage (копирование результата в embed-каталог, сборка с version/commit), минимальный runtime stage, non-root, CA certificates и read-only FS где возможно. Версии базовых образов фиксируются после выбора версии Angular/Go. Альтернативно: копировать dist как read-only каталог в тот же образ. Backend и frontend публикуются одной версией, один сервис — один образ; frontend без UI-сервисов не обязателен.
+Отдельный модуль на net/http без chi/Gin/Fiber. `GET /health/live` — 200 для живого процесса, `GET /health/ready` — 200 только при готовности, иначе 503; JSON без внутренних ошибок, Cache-Control: no-store. `/metrics` регистрируется при подключённой telemetry. Технические endpoints не публикуются через Caddy. Ограничить header/body/timeouts, методы и доступ к debug endpoints. Управление listener через lifecycle: Open синхронно bind, Activate запускает Serve, Quiesce прекращает intake, Drain выполняет Shutdown с дедлайном и Close при необходимости, Close освобождает listener; ошибки фонового Serve через ReportFailure. Readiness снимается до drain всех транспортов. Закрытие должно учитывать HTTP/2 streams; долгоживущие запросы имеют собственную политику завершения.
 
-Критерии готовности: работоспособность двух способов FS, GET/HEAD, Content-Type, cache policy, CORS, traversal и symlink tests, отсутствие directory listing, корректный 404, успешная загрузка remote и его chunks через реальный префикс gateway, graceful shutdown.
-
-Источник: [net/http](https://pkg.go.dev/net/http), [embed](https://pkg.go.dev/embed), [io/fs](https://pkg.go.dev/io/fs), [os.Root](https://go.dev/blog/osroot).
+Источники: [Caddy reverse_proxy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy), [handle](https://caddyserver.com/docs/caddyfile/directives/handle), [file_server](https://caddyserver.com/docs/caddyfile/directives/file_server), [Connect deployment](https://connectrpc.com/docs/go/deployment/).
