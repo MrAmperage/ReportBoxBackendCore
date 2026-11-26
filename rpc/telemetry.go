@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"sync"
 
 	"connectrpc.com/connect"
 	"github.com/MrAmperage/ReportBoxBackendCore/internal/observe"
@@ -26,7 +25,7 @@ func rpcOutcome(err error) string {
 
 type clientObserver struct {
 	observer *observe.Instruments
-	lifetime context.Context
+	streams  *streamTracker
 }
 
 func (i clientObserver) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
@@ -46,46 +45,28 @@ func (i clientObserver) WrapStreamingHandler(next connect.StreamingHandlerFunc) 
 func (i clientObserver) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
 	return func(ctx context.Context, spec connect.Spec) connect.StreamingClientConn {
 		ctx, finish := i.observer.Start(ctx, "rpc.client", spec.Procedure, trace.SpanKindClient)
+		state := i.streams.start(ctx, finish)
+		// If a user interceptor panics during stream construction, do not leak the span.
+		returned := false
+		defer func() {
+			if !returned {
+				state.end("internal")
+			}
+		}()
 		conn := next(ctx, spec)
 		i.observer.Inject(ctx, conn.RequestHeader())
-		// Both caller cancellation and shared transport shutdown terminate the span.
-		s := &observedStream{StreamingClientConn: conn, finish: finish}
-		// These callbacks do not need to touch the underlying stream; only end telemetry.
-		s.install(ctx, i.lifetime)
-		return s
+		returned = true
+		return &observedStream{StreamingClientConn: conn, state: state}
 	}
 }
 
 type observedStream struct {
 	connect.StreamingClientConn
-	finish func(string)
-	mu     sync.Mutex
-	done   bool
-	stop   []func() bool
+	state *streamObservation
 }
 
-func (s *observedStream) install(contexts ...context.Context) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, ctx := range contexts {
-		if ctx != nil {
-			s.stop = append(s.stop, context.AfterFunc(ctx, func() { s.end(rpcOutcome(ctx.Err())) }))
-		}
-	}
-}
-func (s *observedStream) end(outcome string) {
-	s.mu.Lock()
-	if s.done {
-		s.mu.Unlock()
-		return
-	}
-	s.done = true
-	for _, stop := range s.stop {
-		stop()
-	}
-	s.mu.Unlock()
-	s.finish(outcome)
-}
+func (s *observedStream) end(outcome string) { s.state.end(outcome) }
+
 func (s *observedStream) Receive(v any) error {
 	err := s.StreamingClientConn.Receive(v)
 	if err != nil {

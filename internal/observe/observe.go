@@ -28,6 +28,7 @@ type Instruments struct {
 	durations    *prometheus.HistogramVec
 	rpcCounts    *prometheus.CounterVec
 	rpcDurations *prometheus.HistogramVec
+	procedures   procedureLabels
 }
 
 func New(reg *prometheus.Registry) *Instruments {
@@ -82,9 +83,17 @@ func (i *Instruments) Extract(ctx context.Context, h http.Header) context.Contex
 	return propagation.TraceContext{}.Extract(ctx, propagation.HeaderCarrier(header))
 }
 func (i *Instruments) Inject(ctx context.Context, h http.Header) {
-	if i != nil && h != nil {
-		propagation.TraceContext{}.Inject(ctx, propagation.HeaderCarrier(h))
+	if i == nil || h == nil {
+		return
 	}
+	// Replace all case variants; a reused header must not carry a stale parent
+	// or tracestate from an earlier request. Preserve unrelated headers.
+	for k := range h {
+		if strings.EqualFold(k, "traceparent") || strings.EqualFold(k, "tracestate") {
+			delete(h, k)
+		}
+	}
+	propagation.TraceContext{}.Inject(ctx, propagation.HeaderCarrier(h))
 }
 
 // Start returns a finish callback that may safely be called more than once.
@@ -92,6 +101,9 @@ func (i *Instruments) Inject(ctx context.Context, h http.Header) {
 func (i *Instruments) Start(ctx context.Context, operation, name string, kind trace.SpanKind) (context.Context, func(string)) {
 	if i == nil {
 		return ctx, func(string) {}
+	}
+	if operation == "rpc.server" || operation == "rpc.client" {
+		name = i.procedures.label(name)
 	}
 	start := time.Now()
 	ctx, span := i.Provider().Tracer("reportbox.backendcore").Start(ctx, name, trace.WithSpanKind(kind))

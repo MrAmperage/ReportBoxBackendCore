@@ -3,6 +3,7 @@ package observe
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,5 +74,19 @@ func TestNilObserver(t *testing.T) {
 	end("ok")
 	if got != ctx || len(o.Dependencies()) != 0 {
 		t.Fatal("nil observer changed behavior")
+	}
+}
+
+func TestInjectReplacesStaleContext(t *testing.T) {
+	o := New(prometheus.NewRegistry())
+	h := http.Header{"traceparent": {"stale"}, "Traceparent": {"stale"}, "tracestate": {"private"}, "Authorization": {"preserved"}}
+	o.Inject(context.Background(), h)
+	for k := range h {
+		if strings.EqualFold(k, "traceparent") || strings.EqualFold(k, "tracestate") {
+			t.Fatal("stale context")
+		}
+	}
+	if h.Get("Authorization") != "preserved" {
+		t.Fatal("unrelated header removed")
 	}
 }

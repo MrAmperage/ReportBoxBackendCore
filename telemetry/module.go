@@ -109,13 +109,14 @@ func (r *Runtime) close(ctx context.Context) error {
 	if r.provider == nil {
 		return nil
 	}
-	if r.exporterClient != nil {
-		defer r.exporterClient.Stop(ctx)
+	var err error
+	if r.provider.Shutdown(ctx) != nil {
+		err = errors.New("telemetry shutdown failed")
 	}
-	if err := r.provider.Shutdown(ctx); err != nil {
-		return errors.New("telemetry shutdown failed")
+	if r.exporterClient != nil && r.exporterClient.Stop(ctx) != nil {
+		err = errors.Join(err, errors.New("OTLP client stop incomplete"))
 	}
-	return nil
+	return err
 }
 
 // Only sanitized diagnostics leave the exporter boundary.

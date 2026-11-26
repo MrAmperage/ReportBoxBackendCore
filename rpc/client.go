@@ -34,6 +34,7 @@ type Target struct {
 type Client struct {
 	cfg                               ClientConfig
 	observer                          *observe.Instruments
+	streams                           streamTracker
 	production                        bool
 	active                            atomic.Bool
 	lifetime                          context.Context
@@ -84,6 +85,7 @@ func (c *Client) close(context.Context) error {
 	if c.cancel != nil {
 		c.cancel()
 	}
+	c.streams.close()
 	for _, t := range []*http.Transport{c.tls, c.plain, c.h2c} {
 		if t != nil {
 			t.CloseIdleConnections()
@@ -109,7 +111,7 @@ func (c *Client) Target(endpoint string, protocol Protocol, extra ...connect.Cli
 	var hc *http.Client
 	opts := append([]connect.ClientOption(nil), extra...)
 	if c.observer != nil {
-		opts = append(opts, connect.WithInterceptors(clientObserver{observer: c.observer, lifetime: c.lifetime}))
+		opts = append(opts, connect.WithInterceptors(clientObserver{observer: c.observer, streams: &c.streams}))
 	}
 	opts = append(opts, connect.WithReadMaxBytes(c.cfg.MaxMessageBytes), connect.WithSendMaxBytes(c.cfg.MaxMessageBytes))
 	switch protocol {

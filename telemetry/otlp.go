@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
@@ -24,6 +25,10 @@ type otlpClient struct {
 	transport *http.Transport
 	lifetime  context.Context
 	cancel    context.CancelFunc
+	mu        sync.Mutex
+	stopped   bool
+	active    int
+	drained   chan struct{}
 }
 
 var _ otlptrace.Client = (*otlpClient)(nil)
@@ -31,15 +36,45 @@ var _ otlptrace.Client = (*otlpClient)(nil)
 func newOTLPClient(c Config) *otlpClient {
 	t := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: c.ExportTimeout, IdleConnTimeout: 30 * time.Second, MaxIdleConns: 2, MaxConnsPerHost: 2}
 	life, cancel := context.WithCancel(context.Background())
-	return &otlpClient{lifetime: life, cancel: cancel, endpoint: c.Endpoint, transport: t, client: &http.Client{Transport: t, Timeout: c.ExportTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	return &otlpClient{lifetime: life, cancel: cancel, drained: make(chan struct{}), endpoint: c.Endpoint, transport: t, client: &http.Client{Transport: t, Timeout: c.ExportTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 func (c *otlpClient) Start(ctx context.Context) error { return ctx.Err() }
 func (c *otlpClient) Stop(ctx context.Context) error {
-	c.cancel()
+	c.mu.Lock()
+	if !c.stopped {
+		c.stopped = true
+		c.cancel()
+		if c.active == 0 {
+			close(c.drained)
+		}
+	}
+	c.mu.Unlock()
 	c.transport.CloseIdleConnections()
-	return ctx.Err()
+	// The exporter Client contract requires Stop to synchronize with UploadTraces.
+	select {
+	case <-c.drained:
+		c.transport.CloseIdleConnections()
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 func (c *otlpClient) UploadTraces(ctx context.Context, spans []*tracepb.ResourceSpans) error {
+	c.mu.Lock()
+	if c.stopped {
+		c.mu.Unlock()
+		return errors.New("OTLP client stopped")
+	}
+	c.active++
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.active--
+		if c.stopped && c.active == 0 {
+			close(c.drained)
+		}
+		c.mu.Unlock()
+	}()
 	ctx, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(c.lifetime, cancel)
 	defer func() { stop(); cancel() }()
