@@ -1,8 +1,8 @@
 # ADR 0001 — Базовый каркас ReportBox
 
-[К оглавлению](../../README.md)
+[К описанию проекта](../../README.md)
 
-**Статус:** согласованный общий стек; детали ниже предложены для review. Спецификация 0.1, 26 ноября 2026 г.
+**Статус:** согласованный общий стек; детали ниже предложены для review. Спецификация 0.2 (архитектурная ревизия), 26 ноября 2026 г. Согласованный стек не изменён.
 
 ## Согласовано в обсуждении
 
@@ -25,12 +25,25 @@
 | Durable pull consumers, явный ack, idempotency | Управляемая повторная доставка |
 | Subject namespace и Protobuf envelope из messaging.md | Версионирование и correlation; окончательный формат ещё открыт |
 
+## Уточнения после ревизии (предложения)
+
+| Решение | Мотивация |
+|---|---|
+| Пассивные владельцы NATS/pgx, доступ к нативным ресурсам после startup | Исключить утечки при ошибке DI и сохранить нативные API |
+| Небольшой внутренний координатор фаз поверх Fx | Явные зависимости, rollback, снятие readiness и drain всех транспортов до закрытия ресурсов |
+| Разрешение core config до `fx.New`; возможный `NewWithConfig` | Таймауты Fx должны быть параметрами приложения, а не ленивыми DI-зависимостями |
+| `net/http` по умолчанию, chi по необходимости; общий HTTP runtime без общего listener | Не вводить роутер и зависимость между application и management раньше потребности |
+| Защищённый root для directory mode и явная граница доверия `fs.FS` | Не обещать безопасность произвольной файловой системы |
+| Версионированные URL frontend как кандидат для production rollout | Согласованность assets при нескольких репликах и старых вкладках |
+
+Эти уточнения не означают утверждение новых экспортируемых типов. Не реализовывать инфраструктурные пакеты раньше соответствующего этапа. Минимальный CI и smoke example появляются в этапе 1.
+
 ## Открытые вопросы до соответствующего этапа
 
 | Вопрос | Когда решить |
 |---|---|
-| Версия Go, публичные сигнатуры и точные версии зависимостей | Этап 1 |
-| Конфигурация KrakenD/reverse proxy, Native Federation или Module Federation, shared Angular dependencies, rollout старых assets | Этап 2 |
+| Версия Go, публичные сигнатуры (включая lifecycle registration и config overrides), точные версии зависимостей | Этап 1 |
+| Конфигурация KrakenD/reverse proxy, выбор router, Native Federation или Module Federation, shared Angular dependencies, rollout старых assets | Этап 2 |
 | Схема service discovery, место публикации общих Protobuf contracts, TLS/mTLS и service identity | Этап 3 |
 | Envelope vs payload+headers, stream/consumer provisioning, retention, DLQ, ownership outbox/inbox | Этап 4 |
 | Migration tooling, политика PostgreSQL TLS, OTLP collector и метрики | Этап 5 |
