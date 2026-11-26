@@ -60,8 +60,8 @@ func (c ServerConfig) Validate(production bool) error {
 	if c.TLSCertFile == "" && !c.AllowPlaintext && (production || !loopback(host)) {
 		return errors.New("RPC plaintext requires explicit permission outside loopback development")
 	}
-	if c.ReadHeaderTimeout <= 0 || c.IdleTimeout <= 0 || c.CallTimeout <= 0 || c.MaxHeaderBytes <= 0 || c.MaxMessageBytes <= 0 || c.MaxConcurrent <= 0 {
-		return errors.New("RPC server timeouts and limits must be positive")
+	if c.ReadHeaderTimeout <= 0 || c.IdleTimeout <= 0 || c.CallTimeout <= 0 || c.MaxHeaderBytes <= 0 || c.MaxHeaderBytes > int(^uint(0)>>1)-4096 || c.MaxMessageBytes <= 0 || c.MaxConcurrent <= 0 {
+		return errors.New("invalid RPC server timeouts or limits")
 	}
 	return nil
 }

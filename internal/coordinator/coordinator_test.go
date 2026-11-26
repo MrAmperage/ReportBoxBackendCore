@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,5 +93,64 @@ func TestStartupDeadline(t *testing.T) {
 	defer cancel()
 	if err = c.Start(ctx); !errors.Is(err, context.DeadlineExceeded) || !clean || s.Phase() != health.Failed {
 		t.Fatalf("%v clean=%v phase=%v", err, clean, s.Phase())
+	}
+}
+
+func TestHookPanicRollback(t *testing.T) {
+	for _, phase := range []string{"open", "activate"} {
+		t.Run(phase, func(t *testing.T) {
+			state := new(State)
+			var events []string
+			a := lifecycle.Participant{Name: "a", Close: func(context.Context) error { events = append(events, "close:a"); return nil }}
+			b := lifecycle.Participant{Name: "b", DependsOn: []string{"a"}, Close: func(context.Context) error { events = append(events, "close:b"); return nil }}
+			crash := func(context.Context) error { panic("secret panic value") }
+			want := []string{"close:a"}
+			if phase == "open" {
+				b.Open = crash
+			} else {
+				b.Activate = crash
+				want = []string{"close:b", "close:a"}
+			}
+			c, err := New(state, logger(), []lifecycle.Participant{b, a}, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = c.Start(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "lifecycle b "+phase+": callback panic") || strings.Contains(err.Error(), "secret") || state.Phase() != health.Failed || !reflect.DeepEqual(events, want) {
+				t.Fatalf("err=%v state=%v events=%v", err, state.Phase(), events)
+			}
+		})
+	}
+}
+
+func TestHookPanicDoesNotSkipShutdown(t *testing.T) {
+	var events []string
+	normal := func(name string) func(context.Context) error {
+		return func(context.Context) error { events = append(events, name); return nil }
+	}
+	crash := func(name string) func(context.Context) error {
+		return func(context.Context) error { events = append(events, name); panic("secret") }
+	}
+	state := new(State)
+	c, err := New(state, logger(), []lifecycle.Participant{
+		{Name: "a", Quiesce: normal("quiesce:a"), Drain: normal("drain:a"), Close: normal("close:a")},
+		{Name: "b", DependsOn: []string{"a"}, Quiesce: crash("quiesce:b"), Drain: crash("drain:b"), Close: crash("close:b")},
+	}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = c.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	err = c.Stop(context.Background())
+	if err == nil || strings.Count(err.Error(), "callback panic") != 3 || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"quiesce:b", "quiesce:a", "drain:b", "drain:a", "close:b", "close:a"}
+	if !reflect.DeepEqual(events, want) || state.Phase() != health.Stopped {
+		t.Fatalf("events=%v phase=%v", events, state.Phase())
+	}
+	if err = c.Stop(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
