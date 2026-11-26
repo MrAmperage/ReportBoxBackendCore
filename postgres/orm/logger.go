@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/MrAmperage/ReportBoxBackendCore/internal/observe"
 	"gorm.io/gorm"
 	gormlog "gorm.io/gorm/logger"
 )
@@ -13,9 +14,10 @@ import (
 // safeLogger deliberately never evaluates GORM's SQL formatter and never logs
 // its free-form messages or arguments (including database error strings).
 type safeLogger struct {
-	log   *slog.Logger
-	level gormlog.LogLevel
-	slow  time.Duration
+	log      *slog.Logger
+	observer *observe.Instruments
+	level    gormlog.LogLevel
+	slow     time.Duration
 }
 
 var _ gormlog.Interface = safeLogger{}
@@ -38,6 +40,13 @@ func (l safeLogger) Error(ctx context.Context, _ string, _ ...any) {
 }
 func (l safeLogger) Trace(ctx context.Context, begin time.Time, _ func() (string, int64), err error) {
 	duration := time.Since(begin)
+	outcome := "ok"
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		outcome = "not_found"
+	} else if err != nil {
+		outcome = "error"
+	}
+	l.observer.Record("gorm.query", outcome, duration)
 	if l.level <= gormlog.Silent {
 		return
 	}

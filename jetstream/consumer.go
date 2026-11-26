@@ -3,6 +3,8 @@ package jetstream
 import (
 	"context"
 	"errors"
+	"go.opentelemetry.io/otel/trace"
+	"net/http"
 	"regexp"
 	"sync"
 	"sync/atomic"
@@ -100,7 +102,7 @@ func newConsumers(p consumerParams) (*consumers, error) {
 	return c, nil
 }
 func (c *consumers) participant() lifecycle.Participant {
-	return lifecycle.Participant{Name: "jetstream.consumers", DependsOn: []string{"jetstream.client"}, Activate: c.activate, Quiesce: c.quiesce, Drain: c.drain, Close: c.close}
+	return lifecycle.Participant{Name: "jetstream.consumers", DependsOn: c.p.Observer.Dependencies("jetstream.client"), Activate: c.activate, Quiesce: c.quiesce, Drain: c.drain, Close: c.close}
 }
 func (c *consumers) activate(ctx context.Context) error {
 	js, err := c.p.Client.JetStream()
@@ -215,6 +217,7 @@ func pause(ctx context.Context, d time.Duration) bool {
 // handle reports transport success, independently of the business result.
 func (c *consumers) handle(w *worker, m native.Msg) bool {
 	ctx, cancel := context.WithTimeout(c.work, w.spec.HandleTimeout)
+	ctx, finish := c.p.Observer.Start(c.p.Observer.Extract(ctx, http.Header(m.Headers())), "jetstream.process", "jetstream.process", trace.SpanKindConsumer)
 	metadata, err := m.Metadata()
 	if err == nil {
 		err = invoke(ctx, w.spec.Handle, Delivery{Subject: m.Subject(), Data: m.Data(), Headers: m.Headers(), Metadata: metadata})
@@ -223,23 +226,37 @@ func (c *consumers) handle(w *worker, m native.Msg) bool {
 		err = ctx.Err()
 	}
 	cancel()
+	outcome := "ok"
+	if err != nil {
+		outcome = "retry"
+	}
+	if c.work.Err() != nil {
+		outcome = "canceled"
+	}
+	finish(outcome)
 	if c.work.Err() != nil {
 		return false
 	} // uncertain outcome: leave unacked
 	if err != nil {
-		c.p.Logger.Warn("JetStream handler failed")
+		c.p.Logger.WarnContext(ctx, "JetStream handler failed")
+		start := time.Now()
 		if e := m.NakWithDelay(w.spec.RetryDelay); e != nil {
+			c.p.Observer.Record("jetstream.nak", "error", time.Since(start))
 			c.p.Logger.Warn("JetStream negative acknowledgement failed")
 			return false
 		}
+		c.p.Observer.Record("jetstream.nak", "ok", time.Since(start))
 		return true
 	}
 	ack, done := context.WithTimeout(c.work, w.spec.AckTimeout)
 	defer done()
+	start := time.Now()
 	if m.DoubleAck(ack) != nil {
+		c.p.Observer.Record("jetstream.ack", "error", time.Since(start))
 		c.p.Logger.Warn("JetStream acknowledgement uncertain")
 		return false
 	}
+	c.p.Observer.Record("jetstream.ack", "ok", time.Since(start))
 	return true
 }
 func invoke(ctx context.Context, fn func(context.Context, Delivery) error, d Delivery) (err error) {

@@ -69,3 +69,7 @@ err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 Повторно выполнены локальные тесты config/policy (включая запрещённые PG* settings) и gate с Go 1.23.2 в режиме `GO111MODULE=off`, race detector и vet этих файлов — успешно. Проверки с внешними зависимостями, включая новые тесты effective configuration, startup timeout, commit/cancellation, logger и интеграцию GORM, не выполнены: загрузка Go 1.27.0 снова завершилась DNS error для `proxy.golang.org`. `go mod tidy` и полная сборка не подтверждены, версии и go.sum не менялись. Docker/psql в среде отсутствуют. Перед merge выполнить checklist [development](development.md), отдельно реальные TLS/mTLS, shutdown с активной транзакцией и интеграционные сценарии. Кандидат не является проверенным релизом.
 
 Источники API: [pgxpool](https://pkg.go.dev/github.com/jackc/pgx/v5/pgxpool), [OpenDBFromPool](https://pkg.go.dev/github.com/jackc/pgx/v5/stdlib#OpenDBFromPool), [GORM](https://gorm.io/docs/), [pgx changelog](https://github.com/jackc/pgx/blob/v5.13.0/CHANGELOG.md).
+
+## Telemetry
+
+При подключении `telemetry.Module()` снимаются pgxpool stats и длительности/результаты GORM операций через существующий безопасный logger; SQL, параметры и строки ошибок не экспортируются. Нативный API сохранён. См. [Telemetry](telemetry.md).

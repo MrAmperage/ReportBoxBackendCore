@@ -16,6 +16,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/MrAmperage/ReportBoxBackendCore/health"
+	"github.com/MrAmperage/ReportBoxBackendCore/internal/observe"
 	"github.com/MrAmperage/ReportBoxBackendCore/lifecycle"
 )
 
@@ -31,6 +32,7 @@ func newShutdownSignal() *ShutdownSignal { return &ShutdownSignal{done: make(cha
 // Server is a passive owner of the RPC listener. Its lifecycle is managed by Core.
 type Server struct {
 	cfg       ServerConfig
+	observer  *observe.Instruments
 	logger    *slog.Logger
 	report    lifecycle.ReportFailure
 	registry  *health.Registry
@@ -50,15 +52,19 @@ type Server struct {
 	cancel    context.CancelFunc
 }
 
-func newServer(cfg ServerConfig, production bool, logger *slog.Logger, registry *health.Registry, report lifecycle.ReportFailure, handlers []Handler, interceptors []connect.Interceptor, signal *ShutdownSignal) (*Server, error) {
+func newServer(cfg ServerConfig, production bool, logger *slog.Logger, registry *health.Registry, report lifecycle.ReportFailure, handlers []Handler, interceptors []connect.Interceptor, signal *ShutdownSignal, observers ...*observe.Instruments) (*Server, error) {
 	if err := cfg.Validate(production); err != nil {
 		return nil, err
 	}
-	routes, err := buildHandlers(cfg, logger, handlers, interceptors)
+	var observer *observe.Instruments
+	if len(observers) > 0 {
+		observer = observers[0]
+	}
+	routes, err := buildHandlers(cfg, logger, handlers, interceptors, observer)
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{cfg: cfg, logger: logger, report: report, registry: registry, handlers: routes, signal: signal, drained: make(chan struct{}), done: make(chan struct{})}
+	s := &Server{cfg: cfg, observer: observer, logger: logger, report: report, registry: registry, handlers: routes, signal: signal, drained: make(chan struct{}), done: make(chan struct{})}
 	if err := registry.Register(health.Check{Name: "rpc.server", Required: true, Run: func(context.Context) error {
 		if !s.alive.Load() {
 			return errors.New("RPC listener is not running")
@@ -76,7 +82,7 @@ func (s *Server) Address() string { a, _ := s.address.Load().(string); return a 
 // Stopping is closed before draining, allowing long-lived handlers to end gracefully.
 func (s *Server) Stopping() <-chan struct{} { return s.signal.Done() }
 func (s *Server) participant() lifecycle.Participant {
-	return lifecycle.Participant{Name: "rpc.server", Open: s.open, Activate: s.activate, Quiesce: s.quiesce, Drain: s.drain, Close: s.close}
+	return lifecycle.Participant{Name: "rpc.server", DependsOn: s.observer.Dependencies(), Open: s.open, Activate: s.activate, Quiesce: s.quiesce, Drain: s.drain, Close: s.close}
 }
 
 func (s *Server) open(ctx context.Context) error {

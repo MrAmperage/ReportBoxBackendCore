@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/MrAmperage/ReportBoxBackendCore/internal/observe"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // HandlerGroup is the Fx value group for generated service handler factories.
@@ -33,16 +35,20 @@ type Handler struct {
 var servicePath = regexp.MustCompile(`^/(?:[A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*/$`)
 var methodName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-func buildHandlers(c ServerConfig, logger *slog.Logger, registrations []Handler, extra []connect.Interceptor) (map[string]http.Handler, error) {
+func buildHandlers(c ServerConfig, logger *slog.Logger, registrations []Handler, extra []connect.Interceptor, observers ...*observe.Instruments) (map[string]http.Handler, error) {
 	if len(registrations) == 0 {
 		return nil, errors.New("RPC server requires at least one handler")
+	}
+	var observer *observe.Instruments
+	if len(observers) > 0 {
+		observer = observers[0]
 	}
 	handlers := make(map[string]http.Handler, len(registrations))
 	for _, r := range registrations {
 		if r.Build == nil || (r.Authorize != nil) == r.AllowUnauthenticated {
 			return nil, errors.New("RPC handler requires a factory and exactly one authorization policy")
 		}
-		chain := []connect.Interceptor{serverInterceptor{logger: logger, authorize: r.Authorize}}
+		chain := []connect.Interceptor{serverInterceptor{logger: logger, authorize: r.Authorize, observer: observer}}
 		chain = append(chain, extra...)
 		prefix, h := r.Build(connect.WithReadMaxBytes(c.MaxMessageBytes), connect.WithSendMaxBytes(c.MaxMessageBytes), connect.WithInterceptors(chain...))
 		if !servicePath.MatchString(prefix) || h == nil {
@@ -72,11 +78,13 @@ func RequestID(ctx context.Context) string { id, _ := ctx.Value(requestIDKey{}).
 type serverInterceptor struct {
 	logger    *slog.Logger
 	authorize AuthorizeFunc
+	observer  *observe.Instruments
 }
 
 func (i serverInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 	return func(ctx context.Context, req connect.AnyRequest) (resp connect.AnyResponse, err error) {
 		start := time.Now()
+		ctx, finish := i.observer.Start(i.observer.Extract(ctx, req.Header()), "rpc.server", req.Spec().Procedure, trace.SpanKindServer)
 		logCtx := ctx
 		defer func() {
 			if recover() != nil {
@@ -84,6 +92,7 @@ func (i serverInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 				err = connect.NewError(connect.CodeInternal, errors.New("internal error"))
 			}
 			err = safeError(err)
+			finish(rpcOutcome(err))
 			i.log(logCtx, req.Spec().Procedure, start, err)
 		}()
 		if i.authorize != nil {
@@ -101,12 +110,14 @@ func (i serverInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 func (i serverInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
 	return func(ctx context.Context, conn connect.StreamingHandlerConn) (err error) {
 		start := time.Now()
+		ctx, finish := i.observer.Start(i.observer.Extract(ctx, conn.RequestHeader()), "rpc.server", conn.Spec().Procedure, trace.SpanKindServer)
 		logCtx := ctx
 		defer func() {
 			if recover() != nil {
 				err = connect.NewError(connect.CodeInternal, errors.New("internal error"))
 			}
 			err = safeError(err)
+			finish(rpcOutcome(err))
 			i.log(logCtx, conn.Spec().Procedure, start, err)
 		}()
 		if i.authorize != nil {

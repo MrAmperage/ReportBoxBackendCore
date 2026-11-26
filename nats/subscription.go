@@ -9,9 +9,12 @@ import (
 	"time"
 
 	"github.com/MrAmperage/ReportBoxBackendCore/health"
+	"github.com/MrAmperage/ReportBoxBackendCore/internal/observe"
 	"github.com/MrAmperage/ReportBoxBackendCore/lifecycle"
 	native "github.com/nats-io/nats.go"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/fx"
+	"net/http"
 )
 
 // Subscription describes a loss-tolerant Core NATS subscription. One callback
@@ -30,10 +33,11 @@ func ProvideSubscription(constructor any) fx.Option {
 
 type subParams struct {
 	fx.In
-	Conn   *Connection
-	Health *health.Registry
-	Logger *slog.Logger
-	Specs  []Subscription `group:"backendcore.nats.subscriptions"`
+	Conn     *Connection
+	Health   *health.Registry
+	Logger   *slog.Logger
+	Observer *observe.Instruments `optional:"true"`
+	Specs    []Subscription       `group:"backendcore.nats.subscriptions"`
 }
 type subscriptions struct {
 	p         subParams
@@ -56,7 +60,7 @@ func newSubscriptions(p subParams) (*subscriptions, error) {
 	return &subscriptions{p: p, done: make(chan struct{})}, nil
 }
 func (s *subscriptions) participant() lifecycle.Participant {
-	return lifecycle.Participant{Name: "nats.subscriptions", DependsOn: []string{"nats.connection"}, Activate: s.activate, Quiesce: s.quiesce, Drain: s.drain, Close: s.close}
+	return lifecycle.Participant{Name: "nats.subscriptions", DependsOn: s.p.Observer.Dependencies("nats.connection"), Activate: s.activate, Quiesce: s.quiesce, Drain: s.drain, Close: s.close}
 }
 func (s *subscriptions) activate(ctx context.Context) error {
 	if len(s.p.Specs) == 0 {
@@ -105,21 +109,29 @@ func (s *subscriptions) handle(spec Subscription, m *native.Msg) {
 	}
 	s.active++
 	s.mu.Unlock()
+	ctx, cancel := context.WithTimeout(s.ctx, spec.Timeout)
+	defer cancel()
+	ctx, finish := s.p.Observer.Start(s.p.Observer.Extract(ctx, http.Header(m.Header)), "nats.receive", "nats.receive", trace.SpanKindConsumer)
+	outcome := "ok"
 	defer func() {
+		if recover() != nil {
+			outcome = "error"
+			s.p.Logger.ErrorContext(ctx, "NATS subscription handler panic")
+		}
+		if ctx.Err() != nil {
+			outcome = "canceled"
+		}
+		finish(outcome)
 		s.mu.Lock()
 		s.active--
 		if s.stopped && s.active == 0 {
 			close(s.done)
 		}
 		s.mu.Unlock()
-		if recover() != nil {
-			s.p.Logger.Error("NATS subscription handler panic")
-		}
 	}()
-	ctx, cancel := context.WithTimeout(s.ctx, spec.Timeout)
-	defer cancel()
 	if spec.Handle(ctx, m) != nil {
-		s.p.Logger.Warn("NATS subscription handler failed")
+		outcome = "error"
+		s.p.Logger.WarnContext(ctx, "NATS subscription handler failed")
 	}
 }
 func (s *subscriptions) quiesce(context.Context) error {
