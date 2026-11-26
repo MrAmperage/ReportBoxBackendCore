@@ -14,7 +14,7 @@ Readiness обязательной БД проверяется с коротки
 
 `telemetry.Module()` опционален. Использует OpenTelemetry SDK для traces, стандартные W3C propagators и OTLP exporter; Prometheus endpoint на management listener. При отсутствии модуля транспорт использует no-op tracing и отключённые метрики, а не требует регистрации SDK. Предлагаемая точка расширения — явные provider/propagator и опциональный metrics registerer; не создавать конкурирующие Fx providers одного типа в core и telemetry. Management получает metrics handler только при подключении telemetry; registry не зависит от наличия HTTP listener. Сервис не зависит от доступности коллектора. Не считать отказ экспортера причиной liveness/readiness, если это явно не требуется политикой. Экспортер не блокирует приложение бесконечно, буферы ограничены. На остановке flush/shutdown выполняются с дедлайном.
 
-Resource attributes: `service.name`, `service.version`, `service.instance.id` (если доступен), `deployment.environment.name`. Предлагаемые настройки: стандартные `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG`, явная политика TLS. Tracing: HTTP/gRPC client и server, JetStream publish/process, при необходимости DB; пропагация через headers/metadata. Не переносить credentials через baggage, не захватывать тело запросов и query values по умолчанию. Использовать явные provider/registry для тестов вместо неуправляемого global state.
+Resource attributes: `service.name`, `service.version`, `service.instance.id` (если доступен), `deployment.environment.name`. Предлагаемые настройки: стандартные `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG`, явная политика TLS. Tracing: ConnectRPC client и server (включая gRPC protocol), management HTTP при необходимости, JetStream publish/process, при необходимости DB; пропагация через headers/metadata. Не переносить credentials через baggage, не захватывать тело запросов и query values по умолчанию. Использовать явные provider/registry для тестов вместо неуправляемого global state.
 
 Metrics (имена проектные):
 
@@ -22,8 +22,8 @@ Metrics (имена проектные):
 |---|---|---|
 | `http_requests_total` | Counter | method, route, status_class |
 | `http_request_duration_seconds` | Histogram | method, route |
-| `grpc_requests_total` | Counter | service, method, code |
-| `grpc_request_duration_seconds` | Histogram | service, method |
+| `rpc_requests_total` | Counter | service, method, protocol, code |
+| `rpc_request_duration_seconds` | Histogram | service, method, protocol |
 | `nats_connected` | Gauge | — |
 | `jetstream_messages_total` | Counter | consumer, outcome |
 | `jetstream_handler_duration_seconds` | Histogram | consumer |
@@ -34,7 +34,7 @@ Metrics (имена проектные):
 ## 3. Безопасность по умолчанию
 
 - Least privilege: отдельные учётные данные PostgreSQL и NATS для сервисов, ограниченные grants/subjects, ротация. Не хранить секреты в репозитории или образе.
-- TLS на внешнем ingress; для service-to-service — явная политика TLS/mTLS, доверенных сертификатов и сетевых ACL. NATS — TLS и авторизация subject. Не принимать идентичность из неподписанных заголовков gateway.
+- TLS на внешнем Caddy ingress; только разрешённые публичные RPC маршрутизируются наружу; для service-to-service — явная политика TLS/mTLS, доверенных сертификатов и сетевых ACL. NATS — TLS и авторизация subject. Не принимать идентичность из неподписанных заголовков gateway.
 - Ядро предоставляет точки подключения auth middleware/interceptors, но не реализует бизнес-авторизацию или универсальный JWT policy. AuthService/потребители владеют проверкой прав.
 - Ограниченные request sizes, deadlines, concurrency и queues. Recovery на transport boundary не скрывает неожиданные ошибки; клиент получает безопасное сообщение, журнал — достаточные данные без секретов.
 - Контейнер non-root, минимальные разрешения, read-only FS при возможности; health/metrics не доступны из публичной сети.

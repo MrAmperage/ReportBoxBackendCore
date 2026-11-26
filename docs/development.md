@@ -8,31 +8,34 @@
 |---|---|---|
 | 0 | Спецификация в Documentation | Архитектурные решения рассмотрены, открытые вопросы отмечены |
 | 1 | app/config/logging/lifecycle/health, корневой API | Минимальный процесс стартует, останавливается по сигналу, валидирует config; тесты rollback и timeout |
-| 2 | HTTP, management, frontend | Работают health endpoints и remote assets; тесты HTTP security, cache, bind failure и остановки |
-| 3 | gRPC server/client | Пример двух сервисов, deadlines, mapping ошибок, health и shutdown |
-| 4 | NATS + JetStream | Публикация, durable consumer, redelivery, обработка reconnect и drain, проверка duplicate |
-| 5 | PostgreSQL + telemetry | Пул, readiness, метрики, trace через HTTP/gRPC/event; управляемое закрытие |
-| 6 | Полные examples, интеграционный CI, документация и release | Пример сервиса-потребителя, интеграционные тесты, воспроизводимая сборка и первый тег v0.x |
+| 2 | RPC (ConnectRPC server/client) | Go-to-Go и browser через Caddy, HTTP/2 interoperability, deadlines, auth hooks, drain |
+| 3 | NATS + JetStream | Публикация, durable consumer, redelivery, reconnect, drain и duplicate |
+| 4 | PostgreSQL | Пул, readiness, управляемое закрытие |
+| 5 | Management | Закрытые health endpoints, bind failure, shutdown |
+| 6 | Telemetry | Метрики, trace через RPC/event, управляемый flush |
+| 7 | Examples, интеграционный CI, документация и release | Воспроизводимая сборка, примеры потребителей, первый тег v0.x |
 
-Минимальный пример запуска и базовый CI (format/vet/test/build) добавить уже в этапе 1; тесты и интеграционные проверки наращивать одновременно с модулями. Не создавать все пакеты и пустые заглушки заранее. После каждого этапа актуализировать README и документацию реализованного API. При изменении согласованного решения записывать короткий ADR с мотивацией. Ветка `Documentation` предназначена для спецификации; код разрабатывается после её утверждения. Стратегия остальных веток и первый номер релиза уточняются отдельно.
+Минимальный пример запуска и базовый CI (format/vet/test/build) требуются с этапа 1; тесты и интеграционные проверки наращивать одновременно с модулями. Не создавать все пакеты и пустые заглушки заранее. После каждого этапа актуализировать README и документацию реализованного API. При изменении согласованного решения записывать короткий ADR с мотивацией. Ветка `Documentation` предназначена для спецификации; код разрабатывается после её утверждения. Стратегия остальных веток и первый номер релиза уточняются отдельно.
 
-Этап 1: подготовлен кандидат реализации в ветке `Core`. Слияние после полной проверки CI и review API. См. [Core](core.md) и [ADR Core](adr/core.md).
+Этап 1: Core перенесён в `main` (коммит `2b29fd3`); полная Go/Fx проверка не подтверждена, CI workflow отсутствовал на момент проверки. Перед утверждением RPC выполнить полные проверки и подключить базовый CI либо представить локальные результаты. См. [Core](core.md) и [ADR Core](adr/core.md).
+
+UI публикуется отдельно через Caddy, вне этапов Go-модулей. См. [ADR 0003](adr/edge.md) и [HTTP/Frontend](http-frontend.md).
 
 ## 2. Тестирование
 
 Unit tests: table-driven config/defaults/validation, логирование и redaction, health transitions, subject/cache policy и ошибки. Использовать обычные Go constructors и подменяемые зависимости, `httptest`, `fxtest`/`fx.ValidateApp`. Не заменять интеграцию только моками. Проверять отсутствие гонок и утечек ресурсов.
 
-Integration: тестовые NATS с JetStream и PostgreSQL в контейнерах, gRPC loopback/bufconn, реальный HTTP listener для проверки graceful shutdown. Использовать dynamic ports, уникальные namespaces и временные каталоги. Тестовый env не зависит от production. Нужны отдельные subprocess tests для `Run`, SIGTERM и exit code; прямой `fx.App.Start/Stop` не проверяет поведение ОС/CLI. Проверять порядок фаз координатора при перестановке модулей, пропущенной зависимости, цикле и ошибке частичного старта. Предусмотреть повторяемый сценарий `docker compose` или Testcontainers, выбор инструмента ещё не утверждён.
+Integration: тестовые NATS с JetStream и PostgreSQL в контейнерах, ConnectRPC HTTP/1.1 и HTTP/2 loopback, native gRPC interoperability и Caddy reverse proxy, реальный HTTP listener для проверки graceful shutdown. Использовать dynamic ports, уникальные namespaces и временные каталоги. Тестовый env не зависит от production. Нужны отдельные subprocess tests для `Run`, SIGTERM и exit code; прямой `fx.App.Start/Stop` не проверяет поведение ОС/CLI. Проверять порядок фаз координатора при перестановке модулей, пропущенной зависимости, цикле и ошибке частичного старта. Предусмотреть повторяемый сценарий `docker compose` или Testcontainers, выбор инструмента ещё не утверждён.
 
 Обязательные негативные сценарии:
 
 - Некорректный config, обязательная зависимость недоступна, конфликт порта, ошибка частичного OnStart и rollback.
-- SIGTERM при HTTP/gRPC запросе и при обработке JetStream сообщения; readiness снимается до закрытия зависимостей; timeout приводит к завершению, без зависших goroutines.
+- SIGTERM при RPC/management запросе и при обработке JetStream сообщения; readiness снимается до закрытия зависимостей; timeout приводит к контролируемой ошибке/forced close; проверять отсутствие зависших кооперативных goroutines.
 - Потеря NATS/DB, recovery, duplicate events и ошибочный consumer, исчерпание retry; liveness остаётся независимым.
-- Frontend: неверный prefix, пропавший chunk, traversal, symlink, неподдерживаемый метод, отсутствие directory listing, conditional GET, кеш entry-файлов и CORS.
+- RPC: запрещённые публичные процедуры, корректный path, h2c, ограничения размера, deadline, stream cancellation и ошибки proxy. UI deployment отдельно: prefix, пропавший chunk, traversal, symlink, directory listing, кеш, rollback и CORS; smoke test NaiveProxy после изменения Caddy.
 - Никакие secrets из конфигурации и заголовков не попадают в error response или log. Проверить неверный DSN/URL, необработанные driver errors, readiness и trace attributes.
 - Отсутствие открытых ресурсов при ошибке построения DI graph; проверка lazy-конструирования ресурса, отменённых startup/stop contexts и позднего результата health check после shutdown.
-- Отдельный smoke test core без сети, management без application listener и frontend с обеими FS; отсутствие обязательного telemetry SDK для транспортов.
+- Отдельный smoke test core без сети, management без RPC listener, RPC client без server; отсутствие обязательного telemetry SDK для транспортов.
 
 ## 3. CI и качество
 
@@ -54,6 +57,6 @@ go mod verify
 
 Идиоматичное Go naming, ошибки с контекстом (`%w` где уместно), context первым аргументом, документирование exported types. Один Go module; зависимости фиксируются в `go.sum`. SemVer: до v1 API может меняться с явным описанием миграции; после v1 breaking changes требуют major version. Потребители закрепляют конкретный тег, не используют плавающий main в production. Библиотека не публикует Docker-образ как обязательную часть релиза — образ строит сервис-потребитель.
 
-Examples: минимальный core, HTTP+embedded frontend, worker с NATS, пример gRPC; примеры должны компилироваться и проверяться CI. Для первого полноценного smoke test взять простой сервис без доменных зависимостей; AuthService интегрируется после стабилизации нужных модулей.
+Examples: минимальный core, ConnectRPC server/client и Angular через Caddy, worker с NATS, management; примеры должны компилироваться и проверяться CI. Для первого полноценного smoke test взять простой сервис без доменных зависимостей; AuthService интегрируется после стабилизации нужных модулей.
 
 Definition of Done модуля: работает без ненужных подключений; явно определены config, lifecycle, defaults, ошибки и security; unit/integration tests соответствуют рискам; пример использования; обновлена документация; нет очевидных гонок, утечек, секретов и ненужных абстракций.
