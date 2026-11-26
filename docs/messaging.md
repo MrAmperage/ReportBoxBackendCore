@@ -14,7 +14,7 @@
 
 Не вводить второй обязательный RPC-протокол через NATS. Kafka, RabbitMQ и Watermill не входят в базовый стек. Отдельные grpc-go server и gateway не требуются; обычные gRPC-клиенты могут вызывать совместимые ConnectRPC handlers. gRPC-Web поддерживается сервером, но не является обязательным browser transport.
 
-## 2. RPC (реализация-кандидат)
+## 2. RPC (в main)
 
 Реализованный API, настройки и ограничения см. в [RPC](rpc.md) и [ADR 0004](adr/rpc.md). Ниже сохраняются общие требования; при расхождении API ориентироваться на код и профильный документ.
 
@@ -38,15 +38,19 @@ Interceptors: request/trace ID, structured logging, telemetry (опционал�
 
 Lifecycle: участник Open синхронно bind, Activate запускает Serve, Quiesce закрывает admission, Drain ждёт запросы через Shutdown с выделенным deadline, затем при необходимости Close и отмена lifetime contexts. Закрытие DB/NATS только после drain; фоновые ошибки Serve передаются lifecycle.ReportFailure. Для активных streams определить отдельный stop signal и тестировать завершение. Clients закрывают idle connections после завершения обработчиков; запросы отменяются собственными контекстами. Не открывать сокеты до startup; пассивные transport/client объекты допустимы до Open при отсутствии сетевых операций. Management HTTP остаётся независимым; gRPC health compatibility — опциональная возможность, не отдельный публичный listener.
 
-Критерии готовности: два Go-сервиса с typed clients, Angular/TS unary и server streaming через Caddy, native gRPC interoperability по HTTP/2, отказ для запрещённых процедур, deadline/cancellation, limits, mapping ошибок, trace propagation, bind failure, drain и forced close. Кандидат API и версии определены в ветке RPC; полные проверки до merge обязательны.
+Критерии готовности: два Go-сервиса с typed clients, Angular/TS unary и server streaming через Caddy, native gRPC interoperability по HTTP/2, отказ для запрещённых процедур, deadline/cancellation, limits, mapping ошибок, trace propagation, bind failure, drain и forced close. RPC перенесён в main; владелец сообщил о локальной проверке, подробные результаты и Caddy/browser integration не подтверждены.
 
 ## 3. NATS Core
+
+Кандидат реализован в ветке NATS; актуальный API и фактические ограничения см. в [NATS](nats.md) и [ADR 0005](adr/nats.md). Далее — общие архитектурные требования.
 
 `nats.Module()` предоставляет одного пассивного владельца подключения на сервис; нативный `*nats.Conn` доступен через accessor после успешного открытия подключения, в том числе для запуска зависимых компонентов и drain до закрытия. JetStream context создаётся только после готовности подключения. Accessor до старта/после закрытия возвращает определённую ошибку, не nil pointer panic. Подключение устанавливается с ограниченным timeout в startup; callbacks учитывают disconnect/reconnect/closed. Reconnect с backoff/jitter и явной политикой; на временной потере обязательного подключения readiness=false. Не логировать credentials из URL. Настройки: `NATS_URL` (локально `nats://localhost:4222`), `NATS_CONNECT_TIMEOUT`, `NATS_DRAIN_TIMEOUT`, TLS и credentials через файлы/секреты. Не устанавливать wildcard permissions по умолчанию.
 
 Core NATS не сохраняет сообщения для отсутствующих подписчиков. Не использовать его для событий, потеря которых нарушит бизнес-инварианты. Queue groups распределяют работу между активными подписчиками, не дают устойчивой очереди. Core publisher не обещает гарантии хранения сообщения, даже если flush успешен. При остановке сначала прекращать admission и доставку новой работы, затем дожидаться активных handlers (включая исходящие публикации и ack), после этого drain и закрытие подключения с дедлайном. Не закрывать общий connection до завершения consumers; при исчерпании бюджета закрыть connection принудительно и вернуть ошибку. Для Core NATS отдельно определить судьбу буферизованных сообщений; drain не делает их durable.
 
 ## 4. JetStream
+
+Кандидат использует существующие durable pull consumers; актуальные API и ограничения в [NATS](nats.md). Далее — общие требования.
 
 `jetstream.Module()` требует NATS. Использовать актуальный API `github.com/nats-io/nats.go/jetstream`. Долговечные stream/consumer definitions управляются deployment или явной процедурой provisioning, не произвольным destructive update при каждом запуске. Параметры retention, max age/bytes, replicas, storage и quotas обязательны для production и определяются нагрузкой. Несовместимая конфигурация выявляется явно.
 
