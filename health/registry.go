@@ -73,6 +73,10 @@ func (r *Registry) Register(c Check) error {
 // Live reports process health, independently of external dependencies.
 func (r *Registry) Live() bool { p := r.phase(); return p == Starting || p == Running || p == Stopping }
 
+// Running reports whether the managed lifecycle has completed startup and has
+// not begun stopping. It performs no dependency probes.
+func (r *Registry) Running() bool { return r.phase() == Running }
+
 // Ready checks required dependencies within a shared time budget. A successful
 // late probe cannot restore readiness after shutdown. Checks must honor context.
 func (r *Registry) Ready(ctx context.Context) bool {

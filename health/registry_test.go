@@ -76,3 +76,17 @@ func TestBudget(t *testing.T) {
 		t.Fatal("canceled probe ready")
 	}
 }
+
+func TestRunningWithoutProbes(t *testing.T) {
+	phase := Idle
+	r := New(func() Phase { return phase }, time.Second)
+	if err := r.Register(Check{Name: "probe", Required: true, Run: func(context.Context) error { t.Fatal("Running executed a dependency probe"); return nil }}); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []Phase{Idle, Starting, Running, Stopping, Stopped, Failed} {
+		phase = p
+		if r.Running() != (p == Running) {
+			t.Fatalf("phase %v", p)
+		}
+	}
+}

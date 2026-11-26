@@ -1,0 +1,10 @@
+syntax = "proto3";
+package reportbox.example.v1;
+
+import "google/protobuf/wrappers.proto";
+
+option go_package = "github.com/MrAmperage/ReportBoxBackendCore/examples/rpc-demo/echov1";
+
+service EchoService {
+  rpc Echo(google.protobuf.StringValue) returns (google.protobuf.StringValue);
+}
