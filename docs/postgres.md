@@ -62,11 +62,9 @@ err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 
 ## 5. Проверки
 
-Ревизия опубликованного коммита `f9003da` выявила возможность конкурирующих libpq environment settings и преждевременное завершение ожидания cleanup после startup timeout. Кандидат исправлений описан выше. Публичный API, зависимости и модель общего пула сохранены.
-
 Интеграционные тесты с `TEST_POSTGRES_DSN`: native pool startup/health/stop; GORM CRUD и duplicate mapping, rollback, commit с проверкой через pgx, отмена контекста транзакции, исчерпание единого пула, отсутствие idle в SQL adapter и early/late access. Тесты используют случайную таблицу в изолированной БД, не запускать на production. Без переменной интеграционные тесты пропускаются. Отдельно добавлены тесты эффективной driver configuration без сети и неудачного startup с локальным TCP listener без PostgreSQL.
 
-Повторно выполнены локальные тесты config/policy (включая запрещённые PG* settings) и gate с Go 1.23.2 в режиме `GO111MODULE=off`, race detector и vet этих файлов — успешно. Проверки с внешними зависимостями, включая новые тесты effective configuration, startup timeout, commit/cancellation, logger и интеграцию GORM, не выполнены: загрузка Go 1.27.0 снова завершилась DNS error для `proxy.golang.org`. `go mod tidy` и полная сборка не подтверждены, версии и go.sum не менялись. Docker/psql в среде отсутствуют. Перед merge выполнить checklist [development](development.md), отдельно реальные TLS/mTLS, shutdown с активной транзакцией и интеграционные сценарии. Кандидат не является проверенным релизом.
+Общий порядок проверок, включая TLS/mTLS и shutdown с активными транзакциями, см. в [release gate](release.md).
 
 Источники API: [pgxpool](https://pkg.go.dev/github.com/jackc/pgx/v5/pgxpool), [OpenDBFromPool](https://pkg.go.dev/github.com/jackc/pgx/v5/stdlib#OpenDBFromPool), [GORM](https://gorm.io/docs/), [pgx changelog](https://github.com/jackc/pgx/blob/v5.13.0/CHANGELOG.md).
 

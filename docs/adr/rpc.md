@@ -1,20 +1,19 @@
-# ADR 0004 — Реализация RPC
+# ADR 0004 — ConnectRPC и маршрутизация
 
-[ADR 0003](edge.md) · [API RPC](../rpc.md)
-
-Статус: RPC после ревизии перенесён в `main` (`b077f03`). Владелец сообщил о локальной проверке; конкретные команды и логи не предоставлены. CI отсутствовал, отдельные TLS/mTLS и Caddy/browser проверки не подтверждены.
+[Архитектура](../architecture.md) · [API RPC](../rpc.md)
 
 | Решение | Обоснование |
 |---|---|
-| ConnectRPC 1.19.1, Protobuf 1.36.9, текущий Go 1.27 | Стабильный API v1; штатный `http.Protocols` для HTTP/2/h2c, без отдельного grpc-go server и REST framework. |
+| ConnectRPC и Protobuf, версии в `go.mod` | Стабильный API v1; штатный `http.Protocols` для HTTP/2/h2c, без отдельного grpc-go server и REST framework. |
 | `ServerModule`, `ClientModule`, `ProvideHandler`, `Handler` | Независимые модули Fx, обязательная передача options в generated handler, без ранних сетевых операций. |
-| `Authorize` или явный `AllowUnauthenticated` | Нет неявно открытых прикладных сервисов. Публичный allowlist Caddy не заменяет auth. |
-| Loopback `127.0.0.1:9090` default, TLS/mTLS или явный plaintext в production | Минимизировать случайное открытие порта; совместимость с Caddy и Docker. |
+| `Authorize` или явный `AllowUnauthenticated` | Нет неявно открытых прикладных сервисов. Публичный allowlist внешней маршрутизации не заменяет auth. |
+| Loopback `127.0.0.1:9090` default, TLS/mTLS или явный plaintext в production | Минимизировать случайное открытие порта; совместимость с контейнерным deployment. |
 | `Target(endpoint, protocol, extra...)` | Shared HTTP transports, явный gRPC/Connect/gRPC-Web, origin validation; без service discovery до потребности. |
 | `ShutdownSignal` в DI независимо от server | Потоковые handlers могут завершаться до закрытия транспорта без DI cycle. |
-| Deadline 30s, message 4 MiB, concurrency 128, безопасные error codes | Изменяемые консервативные defaults; подробные ошибки и OTel позже. |
+| Deadline 30s, message 4 MiB, concurrency 128, безопасные error codes | Изменяемые консервативные defaults; без передачи чувствительных данных. |
 | Допуск RPC только в фазе Running | Не принимать business calls до полной активации; проверка фазы без выполнения dependency probes. |
 | Lifetime исходящих RPC связан с закрытием клиента; authority pinned | Отмена активных запросов/streams при Close, защита от подмены Host. |
-| Полный архив + CI workflow для RPC | Владелец публикует самостоятельно; сохраняются все файлы основной ветки. |
+| Внешняя маршрутизация и TLS termination вне библиотеки | Не зависеть от реализации ingress; явно разрешать публичные процедуры и проверять права в самом сервисе. |
+| `MaxHeaderBytes` с запасом 4096 байт | Исключить integer overflow в net/http. |
 
-Ограничения: нет automatic retry, Caddy route generation, application auth/JWT, distributed tracing, reflection или service discovery. Пример ручной типизированной регистрации на Protobuf well-known types, генерация stubs/TS ещё не утверждена. TLS/mTLS и браузерная интеграция требуют реальных тестов. `go.sum` содержит upstream checksums; нужна проверка `go mod tidy` и полный прогон Go 1.27. Не считать релизом.
+Ограничения: нет automatic retry, service discovery, reflection, application auth/JWT или генерации конфигурации ingress. Distributed tracing опционален через Telemetry. Browser Connect поддерживает unary и server streaming; client/bidi streaming не гарантируется fetch-транспортом. Native gRPC требует HTTP/2; h2c разрешается только согласно политике конфигурации в доверенной сети. Генерация stubs и публикация Protobuf-контрактов принадлежат сервисам. UI и backend развёртываются независимо; [Static](static.md) не меняет RPC. См. [Frontend deployment](../http-frontend.md).

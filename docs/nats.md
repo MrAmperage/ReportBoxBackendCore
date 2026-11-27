@@ -1,4 +1,4 @@
-# NATS и JetStream: API кандидата
+# NATS и JetStream
 
 [Архитектура сообщений](messaging.md) · [ADR 0005](adr/nats.md) · [Пример](../examples/messaging-demo/README.md)
 
@@ -99,7 +99,7 @@ Delivery содержит subject, data, headers, metadata без методов
 
 ## Проверка
 
-Unit: config/validation, remote policy, panic recovery, latch ошибок ACL/лимита, результаты ACK/NAK и forced cancel. Broker integration: Core subscription, native publish, ForceReconnect и повторная доставка Core-сообщения после reconnect (новая публикация), redelivery, dedup, подтверждение активного handler при shutdown. Opt-in через `NATS_TEST_URL` на отдельном тестовом брокере с JetStream. См. [пример](../examples/messaging-demo/README.md). Локальный Go 1.23.2 не позволяет собрать весь модуль Go 1.27; доступ к proxy отсутствует, Docker и nats-server не установлены. В ревизии `5651a5d` повторно выполнены config test с `-race`, config vet и gofmt для nats/jetstream; `go test ./...` остановился при загрузке Go 1.27 (DNS proxy.golang.org недоступен). Новые regression tests написаны, но не запущены. Полные тесты, ACL/TLS, reconnect (включая длительный outage и число inbox subscriptions), queue-group distribution и forced shutdown пока не подтверждены. Перед merge выполнить проверки [плана разработки](development.md).
+Unit tests: config/validation, remote policy, panic recovery, ACL/лимиты, ACK/NAK и forced cancel. Broker integration: Core subscription, native publish, reconnect, redelivery, dedup, подтверждение активного handler при shutdown. Запускать на отдельном брокере с JetStream через `NATS_TEST_URL`; см. [пример](../examples/messaging-demo/README.md) и [release gate](release.md).
 
 ## Telemetry
 

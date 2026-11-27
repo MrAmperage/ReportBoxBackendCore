@@ -2,8 +2,6 @@
 
 [Архитектура](architecture.md) · [Контракты и сообщения](messaging.md) · [ADR RPC](adr/rpc.md)
 
-Статус: RPC после ревизии перенесён в `main` (`b077f03`). Владелец сообщил о локальной проверке; конкретные команды и логи не предоставлены. CI отсутствовал, отдельные TLS/mTLS и Caddy/browser проверки не подтверждены.
-
 ## 1. Подключение
 
 ```go
@@ -15,7 +13,7 @@ backendcore.Run(
 )
 ```
 
-Server и client подключаются независимо. Без этих модулей Core не создаёт RPC listeners и transports. `ServerModule()` и `ClientModule()` читают ENV; передача одного полного `ServerConfig`/`ClientConfig` отключает ENV для соответствующего модуля. Использовать `DefaultServerConfig()`/`DefaultClientConfig()` как основу явных настроек. Некорректное значение не заменяется молча. `go.mod` сохраняет Go 1.27, Fx 1.24.0; добавлены ConnectRPC 1.19.1 и Protobuf 1.36.9.
+Server и client подключаются независимо. Без этих модулей Core не создаёт RPC listeners и transports. `ServerModule()` и `ClientModule()` читают ENV; передача одного полного `ServerConfig`/`ClientConfig` отключает ENV для соответствующего модуля. Использовать `DefaultServerConfig()`/`DefaultClientConfig()` как основу явных настроек. Некорректное значение не заменяется молча. Точные версии Go, Fx, ConnectRPC и Protobuf определены в `go.mod`.
 
 ## 2. Регистрация сервиса и авторизация
 
@@ -34,9 +32,9 @@ func newAuthHandler(service *AuthService, auth *Authorization) rpc.Handler {
 
 `Authorize` имеет сигнатуру `func(context.Context, string, http.Header) (context.Context, error)`. Вызывается для unary и streaming handler. Возвращаемый контекст должен быть производным от исходного, чтобы сохранить deadline/cancellation и request ID; в него можно добавить проверенную identity. Не доверять клиентским заголовкам без проверки. Ошибки авторизации возвращать как `connect.NewError(connect.CodeUnauthenticated/CodePermissionDenied, err)`.
 
-Ровно один из `Authorize` и `AllowUnauthenticated: true` обязателен. Последний допустим для сознательно выбранных открытых процедур или отдельного demo. Если один service содержит Login и защищённые методы, `Authorize` должен проверять полное имя процедуры и разрешать только согласованные исключения. Caddy дополнительно ограничивает публичные маршруты; отсутствие авторизации не означает разрешение публичной маршрутизации. Анонимность и внешний allowlist — разные понятия. Дублирующие префиксы сервисов отклоняются до bind. `Build` обязан передавать все options generated handler и не открывать ресурсы. Регистрация делается до запуска, динамический роутер не требуется. HTTP dispatch принимает только canonical RPC procedure paths; нет REST, статики, автоматического fallback или reflection.
+Ровно один из `Authorize` и `AllowUnauthenticated: true` обязателен. Последний допустим для сознательно выбранных открытых процедур или отдельного demo. Если один service содержит Login и защищённые методы, `Authorize` должен проверять полное имя процедуры и разрешать только согласованные исключения. Внешняя маршрутизация дополнительно ограничивает публичные маршруты; отсутствие авторизации не означает разрешение публичной маршрутизации. Анонимность и внешний allowlist — разные понятия. Дублирующие префиксы сервисов отклоняются до bind. `Build` обязан передавать все options generated handler и не открывать ресурсы. Регистрация делается до запуска, динамический роутер не требуется. HTTP dispatch принимает только canonical RPC procedure paths; нет REST, статики, автоматического fallback или reflection.
 
-`rpc.InterceptorGroup` — дополнительная Fx value group типа `connect.Interceptor`. Порядок элементов группы не гарантирован; если нужен определённый порядок, предоставить один составной interceptor. Встроенный interceptor является внешней обёрткой: auth hook, recovery, журналирование процедуры/кода/времени/request ID. Запросы, response payload, заголовки, raw driver errors и panic values не логируются. Ошибки по умолчанию преобразуются в безопасный текст кода; `CodeUnknown`/неизвестные ошибки → `CodeInternal`. Error details и metadata не передаются клиенту. Политика безопасных прикладных сообщений может быть добавлена позже. `rpc.RequestID(ctx)` возвращает серверный случайный идентификатор, ответ получает `X-Request-ID`; входящий ID не считается доверенным. Нет автоматической identity propagation, retry или OTel — точки расширения позволяют подключить это отдельно. Стандартный raw `http.Server.ErrorLog` отключён, фатальный отказ listener и ошибки процедур логируются без сырых TLS/HTTP данных.
+`rpc.InterceptorGroup` — дополнительная Fx value group типа `connect.Interceptor`. Порядок элементов группы не гарантирован; если нужен определённый порядок, предоставить один составной interceptor. Встроенный interceptor является внешней обёрткой: auth hook, recovery, журналирование процедуры/кода/времени/request ID. Запросы, response payload, заголовки, raw driver errors и panic values не логируются. Ошибки по умолчанию преобразуются в безопасный текст кода; `CodeUnknown`/неизвестные ошибки → `CodeInternal`. Error details и metadata не передаются клиенту. Политика безопасных прикладных сообщений может быть добавлена позже. `rpc.RequestID(ctx)` возвращает серверный случайный идентификатор, ответ получает `X-Request-ID`; входящий ID не считается доверенным. Нет автоматической identity propagation или retry. Трассировка RPC включается через опциональный `telemetry.Module()`. Стандартный raw `http.Server.ErrorLog` отключён, фатальный отказ listener и ошибки процедур логируются без сырых TLS/HTTP данных.
 
 ## 3. Клиент
 
@@ -67,7 +65,7 @@ auth := authv1connect.NewAuthServiceClient(
 | `RPC_MAX_MESSAGE_BYTES` | `4194304` |
 | `RPC_MAX_CONCURRENT` | `128` |
 
-В development plaintext разрешён на loopback даже при `RPC_ALLOW_PLAINTEXT=false`; в production (значение `SERVICE_ENVIRONMENT=production`) или при non-loopback bind требуется TLS или явное `true`. При TLS certificate/key задаются вместе, `RPC_CLIENT_CA_FILE` включает обязательную проверку клиентских сертификатов. Минимальная TLS 1.2. Никакого `InsecureSkipVerify`. Для host Caddy + Docker backend на том же хосте допустим явный plaintext в защищённой сети: `RPC_ADDRESS=:9090`, `RPC_ALLOW_PLAINTEXT=true`, host publish только `127.0.0.1:9090:9090`. Не публиковать сам контейнерный порт наружу. Для Caddy h2c необходим соответствующий upstream transport; обычный HTTP/1.1 достаточен для Connect unary/browser server streaming, но не для native gRPC.
+В development plaintext разрешён на loopback даже при `RPC_ALLOW_PLAINTEXT=false`; в production (значение `SERVICE_ENVIRONMENT=production`) или при non-loopback bind требуется TLS или явное `true`. При TLS certificate/key задаются вместе, `RPC_CLIENT_CA_FILE` включает обязательную проверку клиентских сертификатов. Минимальная TLS 1.2. Никакого `InsecureSkipVerify`. Для host reverse proxy + Docker backend на том же хосте допустим явный plaintext в защищённой сети: `RPC_ADDRESS=:9090`, `RPC_ALLOW_PLAINTEXT=true`, host publish только `127.0.0.1:9090:9090`. Не публиковать сам контейнерный порт наружу. Для h2c через reverse proxy необходим соответствующий upstream transport; обычный HTTP/1.1 достаточен для Connect unary/browser server streaming, но не для native gRPC.
 
 | ENV клиента | Default |
 |---|---|
@@ -102,19 +100,10 @@ Readiness и lifecycle coordinator остаются в Core. RPC не откры
 
 [Два процесса](../examples/rpc-demo/README.md) используют один Protobuf contract и типизированные нативные Go handlers/clients на готовом well-known type. Service stubs и TypeScript генерация не включены: это отдельная задача прикладных сервисов. Buf/protoc и registry контрактов остаются открытым выбором. ConnectRPC Go reference: https://connectrpc.com/docs/go/getting-started/ ; Go HTTP protocols: https://pkg.go.dev/net/http#Protocols .
 
-Тесты: config/validation, отсутствующие TLS-файлы; реальный HTTP/1.1/HTTP/2 loopback, Connect/gRPC/gRPC-Web, errors/recovery, auth, message limits, stream drain, duplicate route, bind failure, client-only и origin validation. Добавлены тесты на подмену Host, отмену чтения активного HTTP stream при закрытии клиента и запрет RPC до окончания startup. Локально Go 1.23.2: config/security/origin tests и health прошли с race detector и vet, включая реальный HTTP/1.1 loopback origin test; Go 1.27.0 и внешние зависимости не скачиваются в этой среде. Полный прогон, CI, реальные TLS/mTLS handshake, Caddy и браузерная интеграция пока не подтверждены. Перед merge:
-
-```sh
-go mod tidy
-go mod verify
-go test ./...
-go test -race ./...
-go vet ./...
-go build ./...
-```
+Тесты охватывают config, TLS-файлы, реальный HTTP/1.1/HTTP/2 loopback, Connect/gRPC/gRPC-Web, recovery, auth, limits, stream drain, duplicate route, bind failure, client-only, Host/origin и отмену активных streams. Общая процедура проверок — [release gate](release.md).
 
 ## Telemetry
 
 При подключении `telemetry.Module()` server/client unary и streaming interceptors передают W3C trace context и записывают длительность и код завершения generated RPC. Без модуля поведение транспорта не меняется. При остановке клиента зарегистрированные streaming observations завершаются до закрытия Telemetry; закрытие stream и соблюдение контекста остаются обязанностью вызывающего кода. Кардинальность procedure ограничена, повторно используемые trace headers заменяются. См. [Telemetry](telemetry.md).
 
-Ревизия Release: `ServerConfig.Validate` отклоняет `MaxHeaderBytes`, при котором внутренний запас net/http (4096 байт) может вызвать целочисленное переполнение. Default и обычные настройки сохранены.
+`ServerConfig.Validate` отклоняет `MaxHeaderBytes`, при котором внутренний запас net/http (4096 байт) может вызвать целочисленное переполнение.

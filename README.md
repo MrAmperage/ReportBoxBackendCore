@@ -1,6 +1,6 @@
 # ReportBoxBackendCore
 
-Базовая Go-библиотека для микросервисов ReportBox: Fx, ConnectRPC, NATS/JetStream, PostgreSQL/GORM, Management, OpenTelemetry и Prometheus. Core не запускает сетевые ресурсы сам по себе; прикладные модули подключаются явно.
+Базовая Go-библиотека для микросервисов ReportBox: Fx, ConnectRPC, NATS/JetStream, PostgreSQL/GORM, Management, Static, OpenTelemetry и Prometheus. Core не запускает сетевые ресурсы сам по себе; прикладные модули подключаются явно.
 
 Минимальный запуск:
 
@@ -18,11 +18,13 @@ func main() {
 }
 ```
 
-Management по умолчанию слушает `127.0.0.1:7613`. Подключать RPC, messaging, DB и telemetry только при необходимости.
+Management по умолчанию слушает `127.0.0.1:7613`. Подключать RPC, static, messaging, DB и telemetry только при необходимости.
 
 - [Архитектура](docs/architecture.md), [Core](docs/core.md)
 - [ConnectRPC](docs/rpc.md), [NATS и JetStream](docs/nats.md), [PostgreSQL и GORM](docs/postgres.md)
-- [Management](docs/management.md), [Telemetry](docs/telemetry.md)
+- [Management](docs/management.md), [Telemetry](docs/telemetry.md), [Static](docs/static.md)
 - [Примеры и план разработки](docs/development.md), [Release gate](docs/release.md)
 
-Подготовка к первому релизу `v0.1.0`: статус и обязательные проверки приведены в плане разработки. Не считать кандидат выпущенной версией до создания тега.
+Установка: `go get github.com/MrAmperage/ReportBoxBackendCore@<version>` (укажите опубликованный SemVer-тег). Поддерживаемый Go toolchain и версии зависимостей указаны в `go.mod`. Текущий статус выпуска — в [плане разработки](docs/development.md).
+
+Для frontend-сервиса достаточно `static.Module()` с `STATIC_ROOT=dist/browser`, `STATIC_SPA=true`. По умолчанию listener — `127.0.0.1:8080`; наружная маршрутизация и TLS находятся вне библиотеки.

@@ -24,7 +24,7 @@ const HandlerGroup = "backendcore.rpc.handlers"
 type AuthorizeFunc func(ctx context.Context, procedure string, headers http.Header) (context.Context, error)
 
 // Handler registers a generated Protobuf service. Exactly one of Authorize and
-// AllowUnauthenticated must be selected. Public routing is configured in Caddy;
+// AllowUnauthenticated must be selected. Public routing is configured outside the RPC module;
 // AllowUnauthenticated is not an instruction to publish the service externally.
 type Handler struct {
 	Build                func(...connect.HandlerOption) (string, http.Handler)
