@@ -35,6 +35,7 @@ flowchart LR
 | `management` | Закрытый технический HTTP ([API](management.md)) | health, logging, lifecycle |
 | `static` | Раздача готовой сборки UI ([API](static.md)) | health, logging, lifecycle |
 | `rpc` | ConnectRPC handlers, server/client transport, interceptors | logging, lifecycle, health |
+| `auth`, `auth/rpc` | JWT, проверка актуальности, Identity и адаптер RPC ([API](auth.md)) | Нет активных модулей, обязательные providers потребителя |
 | `nats` | Подключение, Core NATS | logging, lifecycle, health |
 | `jetstream` | Надёжные публикации и consumers | nats |
 | `postgres` | Пул PostgreSQL | logging, lifecycle, health |
@@ -50,7 +51,7 @@ Fx используется на уровне композиции. Констр
 ```text
 ReportBoxBackendCore/
 ├── app/ config/ logging/ lifecycle/ health/
-├── rpc/ management/ static/
+├── rpc/ management/ static/ auth/
 ├── nats/ jetstream/
 ├── postgres/             # orm/ — опциональный GORM
 ├── telemetry/
@@ -87,10 +88,12 @@ ReportBoxExampleService/
 | Сервис | Модули сверх ядра |
 |---|---|
 | Простейший фоновый процесс | Нет; опционально management |
-| API без UI | rpc (server), management при необходимости |
+| API без UI | rpc (server), auth для защищённых процедур, management при необходимости |
 | Сервис с Angular remote | rpc (server), нужные RPC/БД, management; UI публикуется отдельно или через static |
 | FrontendService | static, management при необходимости |
 | Worker | management, nats, jetstream, postgres при необходимости |
 | CRUD-сервис | postgres, postgres/orm, нужные RPC и messaging |
 
 Отдельный `go.mod` для каждого модуля пока не требуется. Один Go module проще выпускать и тестировать. Опциональное включение означает отсутствие активных ресурсов, а не гарантию отсутствия всех транзитивных зависимостей в `go.mod`.
+
+`auth` опционален и пассивен; KeyProvider/StateValidator определяют доверенные ключи и актуальность полномочий, без привязки к конкретному сервису. `auth/rpc` использует существующий `rpc.AuthorizeFunc`. Прикладные роли, сессии, кеш и синхронизация находятся вне BackendCore. См. [ADR 0011](adr/auth.md).

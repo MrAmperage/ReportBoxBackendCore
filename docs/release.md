@@ -33,10 +33,11 @@ export NATS_TEST_URL=nats://127.0.0.1:4222
 export TEST_POSTGRES_DSN='postgres://reportbox:localtest@127.0.0.1:55432/reportbox?sslmode=disable'
 go test -race -count=1 ./...
 go test -race -count=3 ./static
+go test -race -count=3 ./auth/...
 docker rm -f reportbox-nats-test reportbox-postgres-test
 ```
 
-Без обоих ENV совместные тесты пропускаются. Не использовать production credentials или ресурсы. Дополнительно проверить browser Connect, gRPC TLS/mTLS, ограничения публичной маршрутизации, закрытость Management, реальный frontend (SPA, chunks, cache), SIGTERM/rollback, reconnect/duplicates, отключённый collector. Проверить нагрузку на RPC, пул, очереди и Static с контролируемыми лимитами; pprof только локально, не через публичный endpoint. Остановка требует cooperative context; единичный smoke не гарантирует производительность.
+Auth проверяет signatures, strict parsing, provider failure/timeout, Fx, RPC policies и реальный listener; не требует NATS/PostgreSQL для собственных тестов. Проверять также реализацию freshness и ротацию ключей конкретного provider в сервисе-потребителе. Без обоих ENV совместные тесты пропускаются. Не использовать production credentials или ресурсы. Дополнительно проверить browser Connect, gRPC TLS/mTLS, ограничения публичной маршрутизации, закрытость Management, реальный frontend (SPA, chunks, cache), SIGTERM/rollback, reconnect/duplicates, отключённый collector. Проверить нагрузку на RPC, пул, очереди и Static с контролируемыми лимитами; pprof только локально, не через публичный endpoint. Остановка требует cooperative context; единичный smoke не гарантирует производительность.
 
 ## Автоматизация
 

@@ -10,5 +10,6 @@
 - ConnectRPC + Protobuf — единый синхронный RPC transport; NATS Core — некритичные уведомления, JetStream — устойчивые события и jobs. Не вводить второй обязательный RPC transport, Kafka, RabbitMQ или Watermill без отдельной потребности.
 - pgxpool и опциональный GORM используют один физический пул; slog, OpenTelemetry и Prometheus обеспечивают наблюдаемость без глобального состояния.
 - Static, RPC и Management — независимые listeners. Маршрутизация, TLS termination внешнего ingress и сборка frontend принадлежат deployment и сервисам. Core не содержит доменных моделей, миграций или UI-компонентов.
+- Опциональный Auth проверяет JWT и текущее состояние через обязательные внешние providers, не владеет сессиями, ролями или политикой конкретного сервиса.
 
-Детали: [RPC](rpc.md), [Messaging](nats.md), [PostgreSQL](postgres.md), [Management](management.md), [Telemetry](telemetry.md), [Static](static.md).
+Детали: [RPC](rpc.md), [Messaging](nats.md), [PostgreSQL](postgres.md), [Management](management.md), [Telemetry](telemetry.md), [Static](static.md), [Auth](auth.md).
