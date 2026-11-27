@@ -8,10 +8,10 @@ BackendCore — библиотека, а не отдельный сетевой 
 
 ```mermaid
 flowchart LR
-    Browser[Angular Shell] -->|HTTPS Connect| Caddy[Caddy]
-    Caddy --> Static[Shell and remotes]
-    Caddy -->|Allowed public RPC| A[Service A / rpc]
-    Caddy -->|Allowed public RPC| B[Service B / rpc]
+    Browser[Browser] -->|HTTPS| Edge[External routing]
+    Edge -->|Static HTTP| Static[Frontend service / static]
+    Edge -->|Allowed public RPC| A[Service A / rpc]
+    Edge -->|Allowed public RPC| B[Service B / rpc]
     A <-->|Internal gRPC| B
     A -->|Events| N[NATS / JetStream]
     N --> B
@@ -21,7 +21,7 @@ flowchart LR
     Monitoring --> B
 ```
 
-Caddy — внешний ingress для TLS, static assets и reverse proxy; он уже используется с NaiveProxy. KrakenD исключён. Отдельный gateway/BFF не требуется на старте. Angular вызывает публичные Connect RPC, Go-сервисы вызывают внутренние RPC напрямую (предлагаемый default — gRPC поверх того же ConnectRPC handler). Caddy не преобразует произвольный REST в RPC. Публичные процедуры разрешаются явно; авторизация остаётся в сервисах. Management изолирован от публичной сети. PostgreSQL и NATS могут быть общими физическими кластерами при сохранении границ владения. См. [ADR 0003](adr/edge.md).
+Внешняя маршрутизация и TLS termination определяются deployment, библиотека не зависит от конкретного reverse proxy. Angular вызывает публичные Connect RPC, Go-сервисы вызывают внутренние RPC напрямую (gRPC поверх того же ConnectRPC handler). Публичные процедуры разрешаются явно; авторизация остаётся в сервисах. FrontendService сам раздаёт готовый UI через опциональный `static.Module()`; RPC, Static и Management не делят listener. Management изолирован от публичной сети. PostgreSQL и NATS могут быть общими физическими кластерами при сохранении границ владения. См. [ADR 0003](adr/edge.md) и [ADR 0010](adr/static.md).
 
 ## 2. Модули
 
@@ -33,6 +33,7 @@ Caddy — внешний ingress для TLS, static assets и reverse proxy; о�
 | `lifecycle` | Координация запуска, остановки, состояния | app, logging |
 | `health` | Реестр проверок и состояние готовности | lifecycle |
 | `management` | Закрытый технический HTTP ([API](management.md)) | health, logging, lifecycle |
+| `static` | Раздача готовой сборки UI ([API](static.md)) | health, logging, lifecycle |
 | `rpc` | ConnectRPC handlers, server/client transport, interceptors | logging, lifecycle, health |
 | `nats` | Подключение, Core NATS | logging, lifecycle, health |
 | `jetstream` | Надёжные публикации и consumers | nats |
@@ -40,7 +41,7 @@ Caddy — внешний ingress для TLS, static assets и reverse proxy; о�
 | `postgres/orm` | GORM, основной API прикладных репозиториев | postgres, logging, lifecycle |
 | `telemetry` | OTel traces и private Prometheus registry | app, config, logging, lifecycle; optional NATS/PostgreSQL snapshots и management handler |
 
-Базовое ядро автоматически предоставляет app, config, logging, lifecycle и health registry. Оно не открывает сетевых портов, не подключается к БД или брокеру. Остальные модули добавляются явно. `jetstream` требует `nats`; `postgres/orm` требует `postgres` и использует тот же физический пул; management запускается независимо. `rpc` использует стандартный net/http, отдельный REST-модуль и Go-раздача frontend не планируются. Server и client выбираются независимо внутри rpc. Telemetry не является обязательным активным модулем: optional Fx instrumentation в `internal/observe` использует OTel API и Prometheus client без создания SDK. Отдельный provider, registry и exporter принадлежат `telemetry.Module()`; см. [Telemetry](telemetry.md). Отсутствующая обязательная зависимость приводит к ошибке графа при запуске. Внешние провайдеры не должны импортировать корневой пакет из дочерних пакетов — это предотвращает циклические импорты.
+Базовое ядро автоматически предоставляет app, config, logging, lifecycle и health registry. Оно не открывает сетевых портов, не подключается к БД или брокеру. Остальные модули добавляются явно. `jetstream` требует `nats`; `postgres/orm` требует `postgres` и использует тот же физический пул; management запускается независимо. `rpc` использует стандартный net/http, отдельный универсальный REST-модуль не планируется. `static` опционально раздаёт готовые файлы UI собственным listener. Server и client выбираются независимо внутри rpc. Telemetry не является обязательным активным модулем: optional Fx instrumentation в `internal/observe` использует OTel API и Prometheus client без создания SDK. Отдельный provider, registry и exporter принадлежат `telemetry.Module()`; см. [Telemetry](telemetry.md). Отсутствующая обязательная зависимость приводит к ошибке графа при запуске. Внешние провайдеры не должны импортировать корневой пакет из дочерних пакетов — это предотвращает циклические импорты.
 
 Fx используется на уровне композиции. Конструкторы прикладных объектов остаются обычными Go-функциями, не получают контейнер DI и не извлекают зависимости из service locator. Пассивные владельцы сетевых ресурсов создаются при сборке графа, а соединения открываются на startup. Прикладные адаптеры используют нативные ресурсы после открытия, а не дублируют API драйверов; lifecycle и readiness координируются по правилам [Core](core.md). Интерфейсы бизнес-зависимостей определяются в потребляющем прикладном пакете. Не вводить универсальную обёртку для каждой функции сторонних библиотек: инфраструктурные адаптеры используют их непосредственно там, где это полезно.
 
@@ -49,7 +50,7 @@ Fx используется на уровне композиции. Констр
 ```text
 ReportBoxBackendCore/
 ├── app/ config/ logging/ lifecycle/ health/
-├── rpc/ management/
+├── rpc/ management/ static/
 ├── nats/ jetstream/
 ├── postgres/             # orm/ — опциональный GORM
 ├── telemetry/
@@ -72,7 +73,7 @@ ReportBoxExampleService/
 │   ├── application/
 │   ├── repository/
 │   └── transport/       # RPC handlers
-├── frontend/             # Angular remote, публикация в Caddy отдельно
+├── frontend/             # Angular remote, публикация владельцем сборки
 ├── api/proto/
 ├── migrations/
 ├── Dockerfile
@@ -87,7 +88,8 @@ ReportBoxExampleService/
 |---|---|
 | Простейший фоновый процесс | Нет; опционально management |
 | API без UI | rpc (server), management при необходимости |
-| Сервис с Angular remote | rpc (server), нужные RPC/БД, management; UI публикуется в Caddy |
+| Сервис с Angular remote | rpc (server), нужные RPC/БД, management; UI публикуется отдельно или через static |
+| FrontendService | static, management при необходимости |
 | Worker | management, nats, jetstream, postgres при необходимости |
 | CRUD-сервис | postgres, postgres/orm, нужные RPC и messaging |
 

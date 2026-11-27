@@ -6,7 +6,7 @@
 
 | Сценарий | Транспорт |
 |---|---|
-| Angular → публичный API | Connect + Protobuf через Caddy |
+| Angular → публичный API | Connect + Protobuf через настроенный публичный origin |
 | Go → Go | ConnectRPC; предлагаемый default — gRPC поверх HTTP/2 напрямую |
 | Некритичное уведомление | Core NATS |
 | Событие, которое должно быть сохранено | JetStream |
@@ -24,7 +24,7 @@
 
 Server: `RPC_ADDRESS=127.0.0.1:9090` (default кандидата), read-header/idle timeouts, limits сообщений и concurrency, TLS/mTLS или явно разрешённый h2c в изолированной сети. Поддержка HTTP/2 обязательна для нативного gRPC, для h2c можно использовать `http.Server.Protocols` при поддерживаемой Go. Проверить реальные сетевые вызовы, не только httptest. Для browser Connect использовать unary и server streaming; client/bidi streaming не обещать стандартному fetch-транспорту. Для внутренних Go-вызовов streaming возможен при подходящем HTTP/2. Не ставить единый короткий WriteTimeout на длительные streams; для каждого RPC/stream установить подходящий bounded deadline и ограничение размера сообщения. Retry только для идемпотентных операций, с backoff/jitter и общим deadline; login/изменяющие операции не повторять автоматически.
 
-Interceptors: request/trace ID, structured logging, telemetry (опционально), recovery, authn/authz hooks. Публичные и внутренние protobuf services или процедуры явно разграничены; routing allowlist Caddy — дополнительная граница, не замена авторизации. Не доверять metadata identity от клиента; сервисная идентичность и TLS-политика требуют согласования до production. Reflection не публиковать. Проверку готовности удалённого сервиса выполнять явно при необходимости, а не считать создание клиента доказательством его доступности.
+Interceptors: request/trace ID, structured logging, telemetry (опционально), recovery, authn/authz hooks. Публичные и внутренние protobuf services или процедуры явно разграничены; routing allowlist внешней маршрутизации — дополнительная граница, не замена авторизации. Не доверять metadata identity от клиента; сервисная идентичность и TLS-политика требуют согласования до production. Reflection не публиковать. Проверку готовности удалённого сервиса выполнять явно при необходимости, а не считать создание клиента доказательством его доступности.
 
 | Доменная ситуация | RPC code (Connect/gRPC) |
 |---|---|
@@ -38,7 +38,7 @@ Interceptors: request/trace ID, structured logging, telemetry (опционал�
 
 Lifecycle: участник Open синхронно bind, Activate запускает Serve, Quiesce закрывает admission, Drain ждёт запросы через Shutdown с выделенным deadline, затем при необходимости Close и отмена lifetime contexts. Закрытие DB/NATS только после drain; фоновые ошибки Serve передаются lifecycle.ReportFailure. Для активных streams определить отдельный stop signal и тестировать завершение. Clients закрывают idle connections после завершения обработчиков; запросы отменяются собственными контекстами. Не открывать сокеты до startup; пассивные transport/client объекты допустимы до Open при отсутствии сетевых операций. Management HTTP остаётся независимым; gRPC health compatibility — опциональная возможность, не отдельный публичный listener.
 
-Критерии готовности: два Go-сервиса с typed clients, Angular/TS unary и server streaming через Caddy, native gRPC interoperability по HTTP/2, отказ для запрещённых процедур, deadline/cancellation, limits, mapping ошибок, trace propagation, bind failure, drain и forced close. RPC перенесён в main; владелец сообщил о локальной проверке, подробные результаты и Caddy/browser integration не подтверждены.
+Критерии готовности: два Go-сервиса с typed clients, Angular/TS unary и server streaming через настроенный публичный origin, native gRPC interoperability по HTTP/2, отказ для запрещённых процедур, deadline/cancellation, limits, mapping ошибок, trace propagation, bind failure, drain и forced close. RPC перенесён в main; владелец сообщил о локальной проверке, подробные результаты и browser/ingress integration не подтверждены.
 
 ## 3. NATS Core
 

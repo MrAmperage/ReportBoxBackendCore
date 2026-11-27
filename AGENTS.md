@@ -8,7 +8,7 @@
 - Go module: `github.com/MrAmperage/ReportBoxBackendCore`.
 - Проект — переиспользуемая библиотека для backend-сервисов ReportBox, а не самостоятельный сетевой сервис.
 - Согласованный стек: Go, Uber Fx, ConnectRPC/Protobuf (Connect, gRPC, gRPC-Web), NATS/JetStream, net/http, pgx/pgxpool, GORM, slog, OpenTelemetry, Prometheus.
-- UI-сервисы владеют сборкой микрофронтенда; Caddy раздаёт статику и проксирует разрешённые RPC. Не реализовывать frontend/REST server в Go. KrakenD исключён. Management опционален и закрыт.
+- UI-сервисы владеют сборкой и публикацией микрофронтендов; `static.Module()` опционально раздаёт готовые файлы отдельным HTTP listener. Внешняя маршрутизация и TLS termination — вне BackendCore. Не реализовывать универсальный REST server или gateway. Management опционален и закрыт.
 - Проект развивается поэтапно. Не считать проектные API в документации реализованными. Фактическое состояние определять по текущей ветке и исходникам.
 
 ## 2. Источники архитектурных решений
@@ -17,12 +17,12 @@
 
 | Документ | Назначение |
 |---|---|
-| [docs/adr/edge.md](docs/adr/edge.md) | Актуальное решение Caddy + ConnectRPC, приоритет над прежними edge/RPC решениями |
+| [docs/adr/edge.md](docs/adr/edge.md) | Решение по ConnectRPC и внешней маршрутизации; раздача UI уточнена ADR 0010 |
 | [docs/adr/baseline.md](docs/adr/baseline.md) | Согласованные решения, предложения и открытые вопросы |
 | [docs/adr/core.md](docs/adr/core.md) | Детали реализации-кандидата Core |
 | [docs/architecture.md](docs/architecture.md) | Границы библиотеки, модули и зависимости |
 | [docs/core.md](docs/core.md) | Core, конфигурация, logging, lifecycle, health |
-| [docs/http-frontend.md](docs/http-frontend.md) | Caddy, management, frontend deployment, CORS и cache |
+| [docs/http-frontend.md](docs/http-frontend.md) | Frontend deployment, внешняя маршрутизация, CORS и cache |
 | [docs/rpc.md](docs/rpc.md) | Реализованный кандидат RPC, конфигурация и lifecycle |
 | [docs/adr/rpc.md](docs/adr/rpc.md) | ADR реализации RPC, ограничения и проверки |
 | [docs/nats.md](docs/nats.md) | API кандидата NATS и JetStream, конфигурация и lifecycle |
@@ -37,7 +37,9 @@
 | [docs/infrastructure.md](docs/infrastructure.md) | PostgreSQL, observability и безопасность |
 | [docs/development.md](docs/development.md) | Этапы реализации, тестирование и выпуск |
 | [docs/release.md](docs/release.md) | Release gate: проверка зависимостей, CI, smoke и публикация |
-| [docs/adr/release.md](docs/adr/release.md) | ADR 0009: решения стабилизации и политика первого выпуска |
+| [docs/adr/release.md](docs/adr/release.md) | ADR 0009: решения стабилизации и политика выпуска |
+| [docs/static.md](docs/static.md) | Static API, конфигурация, lifecycle, безопасность и SPA |
+| [docs/adr/static.md](docs/adr/static.md) | ADR 0010: самостоятельная раздача UI |
 
 Явные указания владельца проекта имеют приоритет над этими инструкциями. Не выдавать предложения из ADR за утверждённые решения. Если исходники расходятся с согласованной спецификацией, обозначить расхождение и исправить его в пределах поставленной задачи; архитектурные изменения согласовать с владельцем. Не разрешать противоречия скрытно.
 
@@ -53,7 +55,7 @@
 - Для прикладных репозиториев PostgreSQL предпочитать GORM Generics API; `postgres/orm` опционален и использует общий pgxpool. Не вводить универсальный BaseRepository, не писать ручной SQL/Scan для обычного CRUD. Нативный pgx оставлять для специальных запросов/COPY. Не запускать AutoMigrate автоматически.
 - Использовать нативные API выбранных библиотек. Не оборачивать каждый сторонний тип ради абстракции. Не добавлять новые зависимости без обоснования.
 - Не добавлять второй обязательный RPC-стек поверх NATS. ConnectRPC — синхронные вызовы (Connect для browser, gRPC для Go как предлагаемый default), Core NATS — уведомления с допустимой потерей, JetStream — устойчивые события и задачи.
-- RPC server на net/http, без универсального REST-фреймворка. Пакет `rpc` предоставляет независимо подключаемые server/client. Management listener отдельный, default `127.0.0.1:7613`; non-loopback требует явного разрешения. Статику раздаёт Caddy, не Go; UI deployment вне ядра.
+- RPC server на net/http, без универсального REST-фреймворка. Пакет `rpc` предоставляет независимо подключаемые server/client. Management listener отдельный, default `127.0.0.1:7613`; non-loopback требует явного разрешения. `static.Module()` предоставляет отдельный listener для готовой сборки UI, независимо от RPC и Management.
 - Сохранять совместимость публичного API после его утверждения; несовместимые изменения фиксировать явно. Точные версии Go и зависимостей брать из актуального `go.mod`, CI и утверждённых решений, не выдумывать их.
 
 ## 4. Lifecycle, надёжность и безопасность
@@ -64,7 +66,7 @@
 - Не использовать startup context как lifetime context. Перед остановкой снять readiness, прекратить приём новой работы, завершить активную работу и закрыть зависимости с ограниченным deadline. Не полагаться только на порядок перечисления `fx.Option` или DI value groups. Учитывать границы гарантии Fx timeout и не обещать принудительную отмену произвольной goroutine.
 - Liveness не зависит от доступности DB/NATS; readiness отражает состояние обязательных ресурсов. Не скрывать фатальные ошибки фоновых серверов.
 - Для JetStream учитывать at-least-once, дубли, ack после устойчивого результата, ограниченные retries и идемпотентность. Не обещать exactly-once бизнес-эффекты или атомарность PostgreSQL + NATS.
-- Разрешать через Caddy только публичные RPC; проверять авторизацию внутри сервиса. Management и внутренние методы не публиковать. Для RPC учитывать HTTP/2, limits, deadlines и drain streams. Для UI deployment исключать traversal, внешние symlinks и directory listing; не выдавать HTML вместо отсутствующего chunk. Не менять существующий Caddy/NaiveProxy без отдельной проверки.
+- Разрешать во внешней маршрутизации только публичные RPC; проверять авторизацию внутри сервиса. Management и внутренние методы не публиковать. Для RPC учитывать HTTP/2, limits, deadlines и drain streams. Для UI deployment исключать traversal, внешние symlinks и directory listing; не выдавать HTML вместо отсутствующего chunk. Не изменять инфраструктуру внешней маршрутизации без отдельного указания.
 - Telemetry опционален; не устанавливать глобальные OTel providers/propagators или Prometheus registry, не захватывать SQL, payload, URL и ошибки как span attributes/labels. Native publishers передают W3C trace context явно.
 - Не логировать токены, пароли, DSN, приватные payload и чувствительные заголовки. Не добавлять секреты в репозиторий. Не включать небезопасные настройки production без явного решения.
 - Использовать context, deadlines и ограниченную конкурентность. Не игнорировать ошибки и не допускать утечек ресурсов.
