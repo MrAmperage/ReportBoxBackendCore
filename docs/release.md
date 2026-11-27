@@ -10,7 +10,7 @@
 - [ ] `gofmt`, `go mod tidy -diff`, `go mod verify`, `go vet`, `go test -race`, `go build` успешны на актуальном патче Go 1.27.
 - [ ] `govulncheck` не находит достижимых уязвимостей; результаты для недостижимых функций рассмотрены. Не подавлять ошибки сканера автоматически.
 - [ ] `TestReleaseGraph`, `TestReleaseIntegration`, `TestReleaseRollback` и существующие unit/integration tests успешны с обоими тестовыми серверами.
-- [ ] Проверены browser Connect, gRPC с TLS/mTLS, закрытость Management и Static (SPA, assets, traversal, symlinks, shutdown).
+- [ ] Проверены browser Connect, gRPC с TLS/mTLS, закрытость Management и Static (SPA, assets, traversal, symlinks, loopback Host/DNS rebinding, overload, forced shutdown).
 - [ ] Выполнен smoke с отключённым collector; контролируемый нагрузочный тест RPC, DB pool и очередей; при необходимости pprof — только в локальной тестовой среде, не через публичный endpoint. Зафиксировать результаты; не выдавать единичный smoke за гарантию производительности.
 - [ ] CI workflow присутствует в GitHub, оба jobs зелёные на релизном коммите.
 - [ ] Документация соответствует проверенному API; владелец подтвердил merge и тег.

@@ -65,6 +65,19 @@ func TestLifecycle(t *testing.T) {
 			t.Fatalf("%s %d %s %v", tc.url, r.StatusCode, b, e)
 		}
 	}
+	req, err := http.NewRequest("GET", "http://"+address+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "untrusted.example:8080"
+	r, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	if r.StatusCode != http.StatusMisdirectedRequest {
+		t.Fatalf("unexpected Host accepted: %d", r.StatusCode)
+	}
 	if err := a.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}

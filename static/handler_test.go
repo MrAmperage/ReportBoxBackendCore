@@ -12,7 +12,7 @@ import (
 
 func TestStaticHandler(t *testing.T) {
 	root := t.TempDir()
-	for name, body := range map[string]string{"index.html": "<h1>shell</h1>", "assets/main.js": "1234567890", "assets/main.js.map": "private map", ".env": "secret", "nested/.secret/x": "secret", "assets/test.wasm": "wasm", "assets/main.css": "body{}", "assets/info.json": "{}", "assets/remote.mjs": "export{}", "microfrontends/auth/v1/remote.js": "remote"} {
+	for name, body := range map[string]string{"index.html": "<h1>shell</h1>", "license": "license text", "existing/child.txt": "child", "assets/main.js": "1234567890", "assets/main.js.map": "private map", ".env": "secret", "nested/.secret/x": "secret", "assets/test.wasm": "wasm", "assets/main.css": "body{}", "assets/info.json": "{}", "assets/remote.mjs": "export{}", "microfrontends/auth/v1/remote.js": "remote"} {
 		file := filepath.Join(root, name)
 		if err := os.MkdirAll(filepath.Dir(file), 0700); err != nil {
 			t.Fatal(err)
@@ -30,6 +30,9 @@ func TestStaticHandler(t *testing.T) {
 		{"GET", "/", "", "", 200, "<h1>shell</h1>", "text/html"},
 		{"GET", "/dashboard/settings/", "text/html", "navigate", 200, "<h1>shell</h1>", "text/html"},
 		{"GET", "/dashboard", "text/html;q=0", "", 404, "", ""},
+		{"GET", "/license/", "text/html", "navigate", 404, "", ""},
+		{"GET", "/existing", "text/html", "navigate", 404, "", ""},
+		{"GET", "/existing/", "text/html", "navigate", 404, "", ""},
 		{"GET", "/dashboard", "*/*", "", 404, "", ""},
 		{"GET", "/dashboard", "text/html", "cors", 404, "", ""},
 		{"HEAD", "/dashboard", "text/html", "", 200, "", "text/html"},
@@ -62,7 +65,9 @@ func TestStaticHandler(t *testing.T) {
 		t.Run(tc.method+tc.url+tc.accept+tc.mode, func(t *testing.T) {
 			req := httptest.NewRequest(tc.method, tc.url, nil)
 			req.Header.Set("Accept", tc.accept)
-			req.Header.Set("Sec-Fetch-Mode", tc.mode)
+			if tc.mode != "" {
+				req.Header.Set("Sec-Fetch-Mode", tc.mode)
+			}
 			rr := httptest.NewRecorder()
 			h.ServeHTTP(rr, req)
 			if rr.Code != tc.code {
@@ -79,6 +84,9 @@ func TestStaticHandler(t *testing.T) {
 			}
 			if tc.code == 200 && rr.Header().Get("Cache-Control") != "no-cache" {
 				t.Fatal("cache policy")
+			}
+			if rr.Header().Get("Vary") != "Accept, Sec-Fetch-Mode" {
+				t.Fatal("missing Vary")
 			}
 			if tc.code == 404 && strings.Contains(rr.Body.String(), "shell") {
 				t.Fatal("unexpected fallback")
@@ -111,5 +119,15 @@ func TestStaticHandler(t *testing.T) {
 	h.ServeHTTP(rr, req)
 	if rr.Code != 304 {
 		t.Fatal("conditional", rr.Code)
+	}
+}
+
+func TestConflictingNavigationHeaders(t *testing.T) {
+	req := httptest.NewRequest("GET", "/dashboard", nil)
+	req.Header.Set("Accept", "text/html")
+	req.Header.Add("Sec-Fetch-Mode", "navigate")
+	req.Header.Add("Sec-Fetch-Mode", "cors")
+	if navigation(req, "dashboard") {
+		t.Fatal("ambiguous navigation accepted")
 	}
 }

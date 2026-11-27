@@ -53,7 +53,7 @@ func navigation(r *http.Request, name string) bool {
 	case "assets", "microfrontends", "api", "rpc", "management", "metrics", "livez", "readyz", "healthz", "static":
 		return false
 	}
-	if mode := r.Header.Get("Sec-Fetch-Mode"); mode != "" && mode != "navigate" {
+	if modes := r.Header.Values("Sec-Fetch-Mode"); len(modes) > 1 || (len(modes) == 1 && modes[0] != "navigate") {
 		return false
 	}
 	for _, value := range r.Header.Values("Accept") {
@@ -77,12 +77,15 @@ func navigation(r *http.Request, name string) bool {
 func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "no-store")
+	// Vary applies to rejected navigation requests too, not just successful files.
+	w.Header().Set("Vary", "Accept, Sec-Fetch-Mode")
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	if r.ContentLength != 0 || len(r.TransferEncoding) != 0 || r.URL.IsAbs() {
+		w.Header().Set("Connection", "close")
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -95,7 +98,7 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f, info, err := h.openFile(name)
 	if err == nil && r.URL.Path != "/" && strings.HasSuffix(r.URL.Path, "/") {
 		f.Close()
-		err = fs.ErrNotExist
+		err = fs.ErrPermission
 	}
 	if errors.Is(err, fs.ErrNotExist) && h.spa && navigation(r, name) {
 		name = "index.html"
@@ -129,8 +132,6 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	}
 	w.Header().Set("Cache-Control", "no-cache")
-	// HTML fallback varies with navigation headers; do not reuse it for a fetch.
-	w.Header().Set("Vary", "Accept, Sec-Fetch-Mode")
 	http.ServeContent(w, r, path.Base(name), info.ModTime(), content)
 }
 
@@ -147,7 +148,7 @@ func (h handler) openFile(name string) (fs.File, fs.FileInfo, error) {
 	}
 	if !info.Mode().IsRegular() {
 		f.Close()
-		return nil, nil, fs.ErrNotExist
+		return nil, nil, fs.ErrPermission
 	}
 	return f, info, nil
 }
