@@ -25,6 +25,6 @@ Management по умолчанию слушает `127.0.0.1:7613`. Подклю
 - [Management](docs/management.md), [Telemetry](docs/telemetry.md), [Static](docs/static.md)
 - [Примеры и план разработки](docs/development.md), [Release gate](docs/release.md)
 
-Опубликована версия `v0.1.0`. Кандидат `v0.1.1` добавляет независимую раздачу готового frontend; проверки и публикация описаны в [release gate](docs/release.md).
+Установка: `go get github.com/MrAmperage/ReportBoxBackendCore@<version>` (укажите опубликованный SemVer-тег). Поддерживаемый Go toolchain и версии зависимостей указаны в `go.mod`. Текущий статус выпуска — в [плане разработки](docs/development.md).
 
 Для frontend-сервиса достаточно `static.Module()` с `STATIC_ROOT=dist/browser`, `STATIC_SPA=true`. По умолчанию listener — `127.0.0.1:8080`; наружная маршрутизация и TLS находятся вне библиотеки.

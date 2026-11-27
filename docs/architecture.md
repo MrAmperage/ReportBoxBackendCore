@@ -21,7 +21,7 @@ flowchart LR
     Monitoring --> B
 ```
 
-Внешняя маршрутизация и TLS termination определяются deployment, библиотека не зависит от конкретного reverse proxy. Angular вызывает публичные Connect RPC, Go-сервисы вызывают внутренние RPC напрямую (gRPC поверх того же ConnectRPC handler). Публичные процедуры разрешаются явно; авторизация остаётся в сервисах. FrontendService сам раздаёт готовый UI через опциональный `static.Module()`; RPC, Static и Management не делят listener. Management изолирован от публичной сети. PostgreSQL и NATS могут быть общими физическими кластерами при сохранении границ владения. См. [ADR 0003](adr/edge.md) и [ADR 0010](adr/static.md).
+Внешняя маршрутизация и TLS termination определяются deployment, библиотека не зависит от конкретного reverse proxy. Angular вызывает публичные Connect RPC, Go-сервисы вызывают внутренние RPC напрямую (gRPC поверх того же ConnectRPC handler). Публичные процедуры разрешаются явно; авторизация остаётся в сервисах. FrontendService сам раздаёт готовый UI через опциональный `static.Module()`; RPC, Static и Management не делят listener. Management изолирован от публичной сети. PostgreSQL и NATS могут быть общими физическими кластерами при сохранении границ владения. См. [ADR RPC](adr/rpc.md) и [ADR 0010](adr/static.md).
 
 ## 2. Модули
 
@@ -45,7 +45,7 @@ flowchart LR
 
 Fx используется на уровне композиции. Конструкторы прикладных объектов остаются обычными Go-функциями, не получают контейнер DI и не извлекают зависимости из service locator. Пассивные владельцы сетевых ресурсов создаются при сборке графа, а соединения открываются на startup. Прикладные адаптеры используют нативные ресурсы после открытия, а не дублируют API драйверов; lifecycle и readiness координируются по правилам [Core](core.md). Интерфейсы бизнес-зависимостей определяются в потребляющем прикладном пакете. Не вводить универсальную обёртку для каждой функции сторонних библиотек: инфраструктурные адаптеры используют их непосредственно там, где это полезно.
 
-## 3. Предлагаемая структура
+## 3. Структура библиотеки и пример сервиса
 
 ```text
 ReportBoxBackendCore/
@@ -54,7 +54,7 @@ ReportBoxBackendCore/
 ├── nats/ jetstream/
 ├── postgres/             # orm/ — опциональный GORM
 ├── telemetry/
-├── internal/             # координатор и общие HTTP-примитивы при необходимости
+├── internal/             # coordinator и observe
 ├── examples/basic-service/
 ├── docs/
 ├── core.go               # package backendcore
@@ -63,7 +63,7 @@ ReportBoxBackendCore/
 └── README.md
 ```
 
-Структура сервиса-потребителя:
+Пример структуры сервиса-потребителя:
 
 ```text
 ReportBoxExampleService/
